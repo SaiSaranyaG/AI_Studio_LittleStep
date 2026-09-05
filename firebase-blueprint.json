@@ -1,78 +1,173 @@
 {
   "entities": {
     "UserProfile": {
-      "collection": "users",
-      "fields": {
+      "title": "User Profile",
+      "description": "User identity and account settings",
+      "type": "object",
+      "properties": {
         "uid": { "type": "string", "description": "Firebase Auth UID" },
         "email": { "type": "string", "description": "User email address" },
-        "phoneNumber": { "type": "string", "description": "User phone number in E.164 format" },
         "displayName": { "type": "string", "description": "Display name" },
         "photoURL": { "type": "string", "description": "Profile photo URL" },
-        "authProvider": { "type": "string", "description": "email | phone" },
         "createdAt": { "type": "string", "description": "ISO timestamp of account creation" },
-        "lastLoginAt": { "type": "string", "description": "ISO timestamp of latest login" },
-        "onboardingCompleted": { "type": "boolean", "description": "Whether the user completed onboarding" },
-        "experienceLevel": { "type": "string", "description": "beginner | intermediate | advanced" },
-        "city": { "type": "string", "description": "User city or region" }
-      }
+        "lastLoginAt": { "type": "string", "description": "ISO timestamp of latest login" }
+      },
+      "required": ["uid", "email"]
     },
-    "Space": {
-      "collection": "spaces",
-      "fields": {
+    "UserSpace": {
+      "title": "User Space Stored",
+      "description": "Space stored by a user including dimensions, light, and zones",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique space identifier" },
         "userId": { "type": "string", "description": "Owner user UID" },
-        "name": { "type": "string", "description": "Space name" },
-        "type": { "type": "string", "description": "balcony | room | patio | windowsill" },
-        "usableAreaSqFt": { "type": "number", "description": "Usable square feet" },
+        "name": { "type": "string", "description": "Human-friendly space name" },
+        "type": { "type": "string", "description": "Room or zone type" },
+        "usableAreaSqFt": { "type": "number", "description": "Usable floor area in square feet" },
         "lengthFt": { "type": "number", "description": "Length in feet" },
         "widthFt": { "type": "number", "description": "Width in feet" },
-        "zones": { "type": "array", "description": "Array of light/airflow zones" },
-        "updatedAt": { "type": "string", "description": "ISO timestamp" }
-      }
+        "zones": { "type": "string", "description": "Light, airflow, and placement zones" },
+        "updatedAt": { "type": "string", "description": "ISO timestamp of last update" },
+        "dataSource": { "type": "string", "description": "cloud or mock indicator" }
+      },
+      "required": ["id", "userId", "name"]
     },
-    "PlantAdoption": {
-      "collection": "adoptions",
-      "fields": {
+    "PlantChosen": {
+      "title": "Plant Chosen",
+      "description": "Plant chosen or adopted by a user for their living space",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique adoption identifier" },
         "userId": { "type": "string", "description": "Owner user UID" },
-        "plantId": { "type": "string", "description": "Botanical species identifier" },
-        "nickname": { "type": "string", "description": "Given nickname" },
-        "zoneId": { "type": "string", "description": "Assigned zone ID" },
-        "adoptedAt": { "type": "string", "description": "ISO timestamp" },
-        "healthStatus": { "type": "string", "description": "thriving | healthy | needs-attention" },
-        "streakDays": { "type": "number", "description": "Care streak days" }
-      }
+        "speciesId": { "type": "string", "description": "Botanical species identifier" },
+        "commonName": { "type": "string", "description": "Botanical common name" },
+        "nickname": { "type": "string", "description": "Custom user given name" },
+        "spaceId": { "type": "string", "description": "Target space identifier" },
+        "zoneId": { "type": "string", "description": "Zone within the space" },
+        "healthStatus": { "type": "string", "description": "thriving, healthy, or needs-attention" },
+        "streakDays": { "type": "number", "description": "Active care streak in days" },
+        "adoptedAt": { "type": "string", "description": "ISO timestamp when plant was chosen" },
+        "updatedAt": { "type": "string", "description": "ISO timestamp of last care or update" },
+        "dataSource": { "type": "string", "description": "cloud or mock indicator" }
+      },
+      "required": ["id", "userId", "speciesId"]
     },
-    "CareTask": {
-      "collection": "care_tasks",
-      "fields": {
+    "MilestoneReached": {
+      "title": "Milestone Reached",
+      "description": "Growth, survival, or care milestone reached by a user",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique milestone identifier" },
         "userId": { "type": "string", "description": "Owner user UID" },
-        "adoptionId": { "type": "string", "description": "Associated plant adoption ID" },
-        "title": { "type": "string", "description": "Task title" },
-        "type": { "type": "string", "description": "water | mist | rotate | fertilize | inspect" },
-        "dueDate": { "type": "string", "description": "Due date" },
-        "isCompleted": { "type": "boolean", "description": "Completion state" }
-      }
+        "plantId": { "type": "string", "description": "Plant adoption identifier" },
+        "plantName": { "type": "string", "description": "Name of plant achieving the milestone" },
+        "milestoneKey": { "type": "string", "description": "Canonical milestone identifier" },
+        "title": { "type": "string", "description": "Display title of the milestone" },
+        "description": { "type": "string", "description": "Milestone criteria achieved" },
+        "pointsAwarded": { "type": "number", "description": "Points credited for this milestone" },
+        "achievedAt": { "type": "string", "description": "ISO timestamp when milestone was unlocked" },
+        "category": { "type": "string", "description": "growth, survival, consistency, or community" }
+      },
+      "required": ["id", "userId", "title", "achievedAt"]
     },
-    "HealthObservation": {
-      "collection": "health_observations",
-      "fields": {
+    "RewardRedeemed": {
+      "title": "Reward Redeemed",
+      "description": "Eco-friendly reward redeemed by a user using earned points",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique redemption record identifier" },
         "userId": { "type": "string", "description": "Owner user UID" },
-        "adoptionId": { "type": "string", "description": "Plant adoption ID" },
-        "plantName": { "type": "string", "description": "Plant nickname or common name" },
-        "timestamp": { "type": "string", "description": "Observation timestamp" },
-        "overallCondition": { "type": "string", "description": "healthy | mild_stress | severe_stress" },
-        "diagnosis": { "type": "string", "description": "Primary diagnosis" },
-        "confidenceScore": { "type": "number", "description": "Diagnostic confidence 0-100" }
-      }
+        "rewardId": { "type": "string", "description": "Reward catalog identifier" },
+        "title": { "type": "string", "description": "Reward title" },
+        "category": { "type": "string", "description": "Reward category" },
+        "pointsCost": { "type": "number", "description": "Cost in LittleStep points" },
+        "isRedeemed": { "type": "boolean", "description": "Redemption status flag" },
+        "redeemedAt": { "type": "string", "description": "ISO timestamp of redemption" },
+        "dataSource": { "type": "string", "description": "cloud indicator" }
+      },
+      "required": ["id", "userId", "rewardId", "pointsCost"]
     },
-    "RewardTransaction": {
-      "collection": "reward_transactions",
-      "fields": {
+    "PointScored": {
+      "title": "Point Scored",
+      "description": "Points scored transaction logged for user activities",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique transaction identifier" },
         "userId": { "type": "string", "description": "Owner user UID" },
-        "actionType": { "type": "string", "description": "water_logged | space_mapped | streak_milestone | reward_redeemed" },
-        "points": { "type": "number", "description": "Signed point delta" },
-        "timestamp": { "type": "string", "description": "Transaction timestamp" },
-        "verified": { "type": "boolean", "description": "Validation flag" }
-      }
+        "actionType": { "type": "string", "description": "Action that triggered the points" },
+        "points": { "type": "number", "description": "Signed point amount scored" },
+        "reason": { "type": "string", "description": "Human-readable explanation" },
+        "recordedAt": { "type": "string", "description": "ISO timestamp of point transaction" },
+        "verified": { "type": "boolean", "description": "Verification flag" },
+        "dataSource": { "type": "string", "description": "cloud indicator" }
+      },
+      "required": ["id", "userId", "actionType", "points", "recordedAt"]
+    },
+    "AnalyticsEvent": {
+      "title": "Analytics Event",
+      "description": "User behavioral and telemetry event for BigQuery streaming analytics",
+      "type": "object",
+      "properties": {
+        "eventId": { "type": "string", "description": "Unique event identifier" },
+        "eventType": { "type": "string", "description": "Canonical event type" },
+        "userId": { "type": "string", "description": "Owner user UID" },
+        "entityId": { "type": "string", "description": "Related entity identifier" },
+        "entityType": { "type": "string", "description": "Entity category" },
+        "timestamp": { "type": "string", "description": "ISO timestamp of the event" },
+        "environment": { "type": "string", "description": "development or production" },
+        "metadata": { "type": "string", "description": "Serialized metadata payload" }
+      },
+      "required": ["eventId", "eventType", "userId", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profile document storing basic account details"
+    },
+    "/users/{userId}/spaces/{spaceId}": {
+      "schema": "UserSpace",
+      "description": "Spaces stored by a specific user"
+    },
+    "/users/{userId}/adoptions/{adoptionId}": {
+      "schema": "PlantChosen",
+      "description": "Plants chosen and cared for by a specific user"
+    },
+    "/users/{userId}/milestones/{milestoneId}": {
+      "schema": "MilestoneReached",
+      "description": "Milestones reached by a specific user"
+    },
+    "/users/{userId}/reward_redemptions/{rewardId}": {
+      "schema": "RewardRedeemed",
+      "description": "Rewards redeemed by a specific user"
+    },
+    "/users/{userId}/points_transactions/{txId}": {
+      "schema": "PointScored",
+      "description": "Point transactions scored by a specific user"
+    },
+    "/spaces/{spaceId}": {
+      "schema": "UserSpace",
+      "description": "Global table of spaces stored across all users for analytics and recovery"
+    },
+    "/plants_chosen/{adoptionId}": {
+      "schema": "PlantChosen",
+      "description": "Global table of plants chosen across all users for analytics and popularity metrics"
+    },
+    "/milestones_reached/{milestoneId}": {
+      "schema": "MilestoneReached",
+      "description": "Global table of milestones reached across all users for achievement analytics"
+    },
+    "/rewards_redeemed/{rewardId}": {
+      "schema": "RewardRedeemed",
+      "description": "Global table of rewards redeemed across all users for incentive analysis"
+    },
+    "/points_scored/{txId}": {
+      "schema": "PointScored",
+      "description": "Global table of points scored across all users for gamification tracking"
+    },
+    "/analytics_events/{eventId}": {
+      "schema": "AnalyticsEvent",
+      "description": "Streamed telemetry events for Google Cloud BigQuery and reporting"
     }
   }
 }

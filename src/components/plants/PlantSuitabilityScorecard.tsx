@@ -12,7 +12,7 @@ import {
 import { PlantRecommendationScore } from '../../types';
 
 interface PlantSuitabilityScorecardProps {
-  scorecard: PlantRecommendationScore;
+  scorecard: any;
   plantName: string;
   onExplainClick?: () => void;
   compact?: boolean;
@@ -24,6 +24,17 @@ export const PlantSuitabilityScorecard: React.FC<PlantSuitabilityScorecardProps>
   onExplainClick,
   compact = false,
 }) => {
+  const spaceScore = scorecard?.spaceScore ?? scorecard?.spaceCompatibility ?? 90;
+  const lightScore = scorecard?.lightScore ?? scorecard?.lightCompatibility ?? 90;
+  const climateScore = scorecard?.climateScore ?? scorecard?.climateCompatibility ?? 90;
+  const maintenanceScore = scorecard?.maintenanceScore ?? scorecard?.maintenanceCompatibility ?? 90;
+  const preferenceScore = scorecard?.preferenceScore ?? 90;
+  const overallScore = scorecard?.overallScore ?? scorecard?.overallSuitability ?? Math.round(
+    spaceScore * 0.2 + lightScore * 0.25 + climateScore * 0.2 + maintenanceScore * 0.15 + preferenceScore * 0.2
+  );
+  const rationale =
+    scorecard?.rationale || `${plantName} evaluated across spatial microclimate, lighting, and botanical criteria.`;
+
   const getScoreColor = (score: number) => {
     if (score >= 85) return 'text-emerald-400 border-emerald-500/40 bg-emerald-950/40';
     if (score >= 70) return 'text-teal-400 border-teal-500/40 bg-teal-950/40';
@@ -39,11 +50,11 @@ export const PlantSuitabilityScorecard: React.FC<PlantSuitabilityScorecardProps>
   };
 
   const dimensions = [
-    { label: 'Space Fit', score: scorecard.spaceScore, icon: Maximize2, desc: 'Dimensions & footprint compatibility' },
-    { label: 'Light Match', score: scorecard.lightScore, icon: Sun, desc: 'Zone Lux & daily solar hours alignment' },
-    { label: 'Climate & Temp', score: scorecard.climateScore, icon: Thermometer, desc: 'Room temperature & humidity range' },
-    { label: 'Care Schedule', score: scorecard.maintenanceScore, icon: Award, desc: 'Water & inspection rhythm fit' },
-    { label: 'Preferences', score: scorecard.preferenceScore, icon: Sparkles, desc: 'Pet safety, experience, & style match' },
+    { label: 'Space Fit', score: spaceScore, icon: Maximize2, desc: 'Dimensions & footprint compatibility' },
+    { label: 'Light Match', score: lightScore, icon: Sun, desc: 'Zone Lux & daily solar hours alignment' },
+    { label: 'Climate & Temp', score: climateScore, icon: Thermometer, desc: 'Room temperature & humidity range' },
+    { label: 'Care Schedule', score: maintenanceScore, icon: Award, desc: 'Water & inspection rhythm fit' },
+    { label: 'Preferences', score: preferenceScore, icon: Sparkles, desc: 'Pet safety, experience, & style match' },
   ];
 
   if (compact) {
@@ -51,12 +62,12 @@ export const PlantSuitabilityScorecard: React.FC<PlantSuitabilityScorecardProps>
       <div id="suitability-scorecard-compact" className="p-3 bg-emerald-950/50 border border-emerald-800/40 rounded-xl space-y-2">
         <div className="flex items-center justify-between">
           <span className="text-xs font-semibold text-emerald-300">Suitability Match</span>
-          <span className="text-sm font-bold text-emerald-400">{scorecard.overallScore}%</span>
+          <span className="text-sm font-bold text-emerald-400">{overallScore}%</span>
         </div>
         <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
           <div
-            className={`h-full rounded-full ${getScoreBarColor(scorecard.overallScore)}`}
-            style={{ width: `${scorecard.overallScore}%` }}
+            className={`h-full rounded-full ${getScoreBarColor(overallScore)}`}
+            style={{ width: `${overallScore}%` }}
           />
         </div>
       </div>
@@ -77,11 +88,11 @@ export const PlantSuitabilityScorecard: React.FC<PlantSuitabilityScorecardProps>
             </span>
           </div>
           <h3 className="text-lg font-bold text-white mt-1">Suitability Scorecard: {plantName}</h3>
-          <p className="text-xs text-slate-400 mt-0.5">{scorecard.rationale}</p>
+          <p className="text-xs text-slate-400 mt-0.5">{rationale}</p>
         </div>
 
-        <div className={`flex flex-col items-center justify-center px-4 py-2 rounded-xl border ${getScoreColor(scorecard.overallScore)}`}>
-          <span className="text-2xl font-black">{scorecard.overallScore}%</span>
+        <div className={`flex flex-col items-center justify-center px-4 py-2 rounded-xl border ${getScoreColor(overallScore)}`}>
+          <span className="text-2xl font-black">{overallScore}%</span>
           <span className="text-[10px] font-medium uppercase tracking-wider opacity-80">Match Rate</span>
         </div>
       </div>

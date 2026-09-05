@@ -19,6 +19,43 @@ export interface SpaceZone {
   notes?: string;
 }
 
+export interface SpacePlantRecommendation {
+  name: string;
+  reason: string;
+  lightRequirement: string;
+  careLevel: 'EASY' | 'MEDIUM' | 'HARD';
+  placementSuggestion?: string;
+}
+
+export interface SpaceAnalysisResult {
+  overallStatus: 'GOOD' | 'MODERATE' | 'POOR' | 'INSUFFICIENT_DATA';
+  spaceType: string;
+  lighting: {
+    classification: 'DIRECT' | 'BRIGHT_INDIRECT' | 'MEDIUM' | 'LOW' | 'INSUFFICIENT_DATA';
+    estimatedHoursOfUsableLight: number | null;
+    directSunlightVisible: boolean;
+    windowsVisible: boolean;
+    windowCount: number;
+    lightEvidence: string;
+  };
+  placement: {
+    bestAreas: string[];
+    avoidAreas: string[];
+  };
+  environment: {
+    humidityAssessment: string;
+    airflowAssessment: string;
+    temperature: number | null;
+  };
+  plantRecommendations: SpacePlantRecommendation[];
+  warnings: string[];
+  confidence: number;
+  sunlightStatus: 'Good' | 'Moderate' | 'Low' | 'Insufficient data';
+  lightType: 'Direct' | 'Bright indirect' | 'Medium' | 'Low' | 'Insufficient data';
+  evidence: string;
+  limitations: string;
+}
+
 export interface SpaceProfile {
   id: string;
   name: string;
@@ -38,6 +75,7 @@ export interface SpaceProfile {
   lastScannedAt: string;
   isFallback?: boolean;
   dataSource?: 'cloud' | 'mock' | 'heuristic_fallback';
+  analysis?: SpaceAnalysisResult;
 }
 
 export interface PlantSpecies {
@@ -94,6 +132,8 @@ export interface PlantSpecies {
 
 export type PlantStyleCategory =
   | 'all'
+  | 'air_purifying'
+  | 'medicinal'
   | 'flowering'
   | 'herbs_edible'
   | 'decorative'
@@ -246,6 +286,63 @@ export interface AirMetric {
   confidence?: number;
 }
 
+export interface RoomSensorReadings {
+  indoorCo2?: AirMetric;
+  indoorTvoc?: AirMetric;
+  indoorPm25?: AirMetric;
+  indoorPm10?: AirMetric;
+  indoorTemp: AirMetric;
+  indoorHumidity: AirMetric;
+  vaporPressureDeficit?: { value: number; unit: 'kPa' };
+  ambientLight?: { value: number; unit: 'lux' };
+  ventilationState?: 'closed' | 'open_window' | 'hvac_active' | 'air_purifier_active';
+  sensorDeviceModel?: string;
+  capturedAt: string;
+}
+
+export interface AiSensorAnalysis {
+  id: string;
+  analyzedAt: string;
+  airQualityScore: number;
+  airQualityGrade: 'EXCELLENT' | 'GOOD' | 'MODERATE' | 'NEEDS_VENTILATION' | 'POOR';
+  headline: string;
+  environmentalSummary: string;
+  sensorSynthesis: Array<{
+    sensorName: string;
+    measuredValue: string;
+    status: 'optimal' | 'moderate' | 'warning' | 'alert';
+    benchmarkStandard: string;
+    scientificFinding: string;
+  }>;
+  vpdAnalysis: {
+    vpdKpa: number;
+    transpirationState: 'optimal' | 'inhibited_high_humidity' | 'excessive_dry_air';
+    explanation: string;
+  };
+  plantMicroclimateInteractions: Array<{
+    plantNickname: string;
+    species: string;
+    interactionType: string;
+    observation: string;
+  }>;
+  confoundingAttributions: Array<{
+    factor: string;
+    attributionType: string;
+    impactDescription: string;
+  }>;
+  actionableOptimizations: Array<{
+    priority: 'immediate' | 'recommended' | 'routine';
+    action: string;
+    expectedBenefit: string;
+    timeline: string;
+  }>;
+  baselineComparison?: {
+    trendNote: string;
+  };
+  scientificIntegrityStatement: string;
+  source: 'gemini_agent' | 'environment_engine';
+}
+
 export interface AirQualityBaseline {
   id: string;
   spaceId: string;
@@ -257,7 +354,11 @@ export interface AirQualityBaseline {
   indoorTemp: AirMetric;
   indoorHumidity: AirMetric;
   indoorCo2?: AirMetric;
+  indoorTvoc?: AirMetric;
+  indoorPm25?: AirMetric;
+  sensorDeviceModel?: string;
   isUserVerified: boolean;
+  aiDiagnosticSummary?: string;
 }
 
 export interface AirTimelineEntry {
@@ -270,8 +371,13 @@ export interface AirTimelineEntry {
   outdoorAqi: AirMetric;
   indoorHumidity: AirMetric;
   indoorTemp: AirMetric;
+  indoorCo2?: AirMetric;
+  indoorTvoc?: AirMetric;
+  indoorPm25?: AirMetric;
   confoundingFactors: string[];
   scientificAnalysis: string;
+  aiAnalysis?: AiSensorAnalysis;
+  sensorReadings?: RoomSensorReadings;
 }
 
 export interface PointTransaction {

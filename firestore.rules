@@ -12,17 +12,53 @@ service cloud.firestore {
     }
 
     // Authoritative User Data Schema: /users/{userId} and all subcollections
-    // Strictly enforces user data isolation (BUG-18):
-    // - Anonymous (unauthenticated) access -> DENIED
-    // - User A reading/modifying/deleting User B data -> DENIED
-    // - User B reading/modifying/deleting User A data -> DENIED
-    // - Authenticated User accessing own data -> ALLOWED
     match /users/{userId} {
       allow read, write: if isOwner(userId);
 
       match /{subcollection}/{docId} {
         allow read, write: if isOwner(userId);
       }
+    }
+
+    // Google Cloud Tables: Spaces Stored
+    match /spaces/{spaceId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      allow delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+    }
+
+    // Google Cloud Tables: Plants Chosen (Adoptions)
+    match /plants_chosen/{adoptionId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      allow delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+    }
+
+    // Google Cloud Tables: Milestones Reached
+    match /milestones_reached/{milestoneId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      allow delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+    }
+
+    // Google Cloud Tables: Rewards Redeemed
+    match /rewards_redeemed/{rewardId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      allow delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+    }
+
+    // Google Cloud Tables: Points Scored
+    match /points_scored/{txId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      allow delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+    }
+
+    // Google Cloud Tables: Telemetry & Analytics Events
+    match /analytics_events/{eventId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() || true;
     }
 
     // Deny access to any unlisted root collections or paths

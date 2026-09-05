@@ -19,9 +19,12 @@ import {
   Trees,
   Gem,
   LayoutGrid,
+  Wind,
+  Activity,
 } from 'lucide-react';
 import { PlantSpecies, RecommendationResult, UserPlantPreferences, SpaceZone, PlantStyleCategory } from '../../types';
 import { PlantSuitabilityScorecard } from './PlantSuitabilityScorecard';
+import { calculateBotanicalScorecard } from '../../utils/botanicalScoring';
 
 interface PlantRecommendationHeroProps {
   recommendation: RecommendationResult | null;
@@ -51,6 +54,24 @@ export const CATEGORY_OPTIONS: {
     desc: 'Best biological fit for your scanned space',
     badge: 'Space Optimized',
     icon: LayoutGrid,
+  },
+  {
+    id: 'air_purifying',
+    label: 'Air Purifying Plants',
+    shortLabel: '🍃 Air Purifying',
+    emoji: '🍃',
+    desc: 'NASA clean-air & natural indoor toxin-filtering plants',
+    badge: 'Air Purifying',
+    icon: Wind,
+  },
+  {
+    id: 'medicinal',
+    label: 'Medicinal Plants',
+    shortLabel: '🩺 Medicinal',
+    emoji: '🩺',
+    desc: 'Healing aloe vera, soothing herbs & therapeutic wellness',
+    badge: 'Medicinal & Healing',
+    icon: Activity,
   },
   {
     id: 'flowering',
@@ -180,22 +201,15 @@ export const PlantRecommendationHero: React.FC<PlantRecommendationHeroProps> = (
   }
 
   const activeDisplaySpecies =
-    activeAltIdx !== null && alternatives[activeAltIdx]
+    activeAltIdx !== null && alternatives && alternatives[activeAltIdx]
       ? alternatives[activeAltIdx].species
       : primaryRecommendation.species;
 
   const activeDisplayScorecard =
-    activeAltIdx !== null && alternatives[activeAltIdx]?.scorecard
-      ? alternatives[activeAltIdx].scorecard!
-      : primaryRecommendation.scorecard || {
-          overallScore: 92,
-          spaceScore: 90,
-          lightScore: 95,
-          climateScore: 90,
-          maintenanceScore: 95,
-          preferenceScore: 90,
-          rationale: `${activeDisplaySpecies.commonName} matches target lighting and space constraints.`,
-        };
+    activeAltIdx !== null && alternatives && alternatives[activeAltIdx]?.scorecard
+      ? alternatives[activeAltIdx].scorecard
+      : primaryRecommendation.scorecard ||
+        calculateBotanicalScorecard(activeDisplaySpecies, targetZone, undefined, userPreferences);
 
   const currentCategory = CATEGORY_OPTIONS.find((c) => c.id === userPreferences.plantStyle) || CATEGORY_OPTIONS[0];
 
@@ -282,7 +296,7 @@ export const PlantRecommendationHero: React.FC<PlantRecommendationHeroProps> = (
           </span>
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5" id="plant-category-buttons">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-2.5" id="plant-category-buttons">
           {CATEGORY_OPTIONS.map((cat) => {
             const isSelected = (userPreferences.plantStyle || 'all') === cat.id;
             const Icon = cat.icon;
@@ -335,6 +349,8 @@ export const PlantRecommendationHero: React.FC<PlantRecommendationHeroProps> = (
               className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-white focus:outline-none focus:border-emerald-500"
             >
               <option value="all">✨ All Companions (Best Space Fit)</option>
+              <option value="air_purifying">🍃 Air Purifying Plants (Clean Air & Toxin Filtering)</option>
+              <option value="medicinal">🩺 Medicinal Plants (Therapeutic & Healing Herbs)</option>
               <option value="flowering">🌸 Plants with Flowers (Blooms)</option>
               <option value="herbs_edible">🍅 Veggies & Culinary Herbs (Edible)</option>
               <option value="decorative">🌿 Decorative Live Foliage & Vines</option>

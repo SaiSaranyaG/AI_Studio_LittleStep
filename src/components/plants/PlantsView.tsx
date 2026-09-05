@@ -33,6 +33,7 @@ import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
 import { PlantSpecies, PlantAdoption, SpaceZone, PlantHealthStatus, HealthDiagnostic } from '../../types';
 import { PlantRecommendationHero } from './PlantRecommendationHero';
+import { compressImageQuick } from '../../utils/imageCompression';
 import { PlantSetupJourneyModal } from './PlantSetupJourneyModal';
 import { PlantExplanationModal } from './PlantExplanationModal';
 import { PlantHealthCheckModal } from './PlantHealthCheckModal';
@@ -88,12 +89,12 @@ export const PlantsView: React.FC = () => {
   const sampleHealthPhotos = [
     {
       name: 'Lower Leaf Yellowing (Chlorosis)',
-      url: 'https://images.unsplash.com/photo-1593482892290-f54927ae1bf6?auto=format&fit=crop&w=600&q=80',
+      url: 'https://images.unsplash.com/photo-1598880940371-c756e015fea1?auto=format&fit=crop&w=600&q=80',
       notes: 'Noticed slight yellowing on bottom leaves over the last 3 days.',
     },
     {
       name: 'Dry Soil & Leaf Droop',
-      url: 'https://images.unsplash.com/photo-1593691509543-c55fb32e7355?auto=format&fit=crop&w=600&q=80',
+      url: 'https://images.unsplash.com/photo-1545241047-6083a3684587?auto=format&fit=crop&w=600&q=80',
       notes: 'Soil surface is bone dry and leaves have lost tension.',
     },
     {
@@ -103,7 +104,7 @@ export const PlantsView: React.FC = () => {
     },
   ];
 
-  const handleHealthPhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleHealthPhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !activePlant) return;
 
@@ -116,13 +117,19 @@ export const PlantsView: React.FC = () => {
       return;
     }
 
-    const reader = new FileReader();
-    reader.onload = async () => {
-      const base64 = reader.result as string;
+    try {
+      const base64 = await compressImageQuick(file, 1024, 0.82);
       await runHealthCheck(activePlant.id, base64, healthNotes);
       setActiveTabSub('health_camera');
-    };
-    reader.readAsDataURL(file);
+    } catch {
+      const reader = new FileReader();
+      reader.onload = async () => {
+        const base64 = reader.result as string;
+        await runHealthCheck(activePlant.id, base64, healthNotes);
+        setActiveTabSub('health_camera');
+      };
+      reader.readAsDataURL(file);
+    }
   };
 
   const handleSampleHealthDiagnostic = async (sample: (typeof sampleHealthPhotos)[0]) => {
@@ -140,13 +147,9 @@ export const PlantsView: React.FC = () => {
     try {
       const response = await fetch(sample.url);
       const blob = await response.blob();
-      const reader = new FileReader();
-      reader.onload = async () => {
-        const base64 = reader.result as string;
-        await runHealthCheck(activePlant.id, base64, sample.notes);
-        setActiveTabSub('health_camera');
-      };
-      reader.readAsDataURL(blob);
+      const base64 = await compressImageQuick(blob, 1024, 0.82);
+      await runHealthCheck(activePlant.id, base64, sample.notes);
+      setActiveTabSub('health_camera');
     } catch {
       await runHealthCheck(activePlant.id, sample.url, sample.notes);
       setActiveTabSub('health_camera');

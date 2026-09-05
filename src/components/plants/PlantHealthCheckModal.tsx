@@ -18,9 +18,11 @@ import {
   Clock,
   Eye,
   Check,
+  Zap,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { PlantAdoption, PlantSpecies, HealthDiagnostic, PlantHealthStatus, HealthConfidence } from '../../types';
+import { optimizeImageForSpaceAnalysis, formatBytes } from '../../utils/imageCompression';
 
 interface PlantHealthCheckModalProps {
   isOpen: boolean;
@@ -45,18 +47,21 @@ export const PlantHealthCheckModal: React.FC<PlantHealthCheckModalProps> = ({
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [userNotes, setUserNotes] = useState('');
   const [currentResult, setCurrentResult] = useState<HealthDiagnostic | null>(null);
+  const [isCompressing, setIsCompressing] = useState(false);
+  const [compressionSummary, setCompressionSummary] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   // Pre-configured sample plant photographs for quick evaluation
   const sampleScenarios = [
     {
       name: 'Foliage Chlorosis (Yellowing)',
-      url: 'https://images.unsplash.com/photo-1593482892290-f54927ae1bf6?auto=format&fit=crop&w=600&q=80',
+      url: 'https://images.unsplash.com/photo-1598880940371-c756e015fea1?auto=format&fit=crop&w=600&q=80',
       notes: 'Noticed slight pale yellowing on bottom leaves over the last 3 days.',
       hint: 'Simulates lower-canopy nutrient & moisture cycling check',
     },
     {
       name: 'Moisture Drought & Droop',
-      url: 'https://images.unsplash.com/photo-1593691509543-c55fb32e7355?auto=format&fit=crop&w=600&q=80',
+      url: 'https://images.unsplash.com/photo-1545241047-6083a3684587?auto=format&fit=crop&w=600&q=80',
       notes: 'Soil surface is dry and leaves have lost tension.',
       hint: 'Simulates dry-cycle evaluation and hydration advice',
     },
@@ -70,20 +75,36 @@ export const PlantHealthCheckModal: React.FC<PlantHealthCheckModalProps> = ({
 
   if (!isOpen) return null;
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const reader = new FileReader();
-    reader.onload = () => {
-      const base64 = reader.result as string;
-      setSelectedImage(base64);
-    };
-    reader.readAsDataURL(file);
+    setErrorMessage(null);
+    setIsCompressing(true);
+    try {
+      const opt = await optimizeImageForSpaceAnalysis(file, { maxDimension: 1024, quality: 0.82 });
+      setSelectedImage(opt.dataUrl);
+      setCompressionSummary(
+        `Fast Vision Optimized: ${formatBytes(opt.originalSizeBytes)} ➔ ${formatBytes(opt.compressedSizeBytes)} (${Math.round(opt.reductionPercentage)}% payload reduction)`
+      );
+    } catch (compressErr) {
+      console.warn('Direct image compression skipped, fallback to file reader:', compressErr);
+      const reader = new FileReader();
+      reader.onload = () => {
+        const base64 = reader.result as string;
+        setSelectedImage(base64);
+        setCompressionSummary(null);
+      };
+      reader.readAsDataURL(file);
+    } finally {
+      setIsCompressing(false);
+    }
   };
 
   const handleSelectSample = (sample: (typeof sampleScenarios)[0]) => {
+    setErrorMessage(null);
     setSelectedImage(sample.url);
+    setCompressionSummary('Benchmark botanical photo loaded');
     if (!userNotes) {
       setUserNotes(sample.notes);
     }
@@ -91,21 +112,18 @@ export const PlantHealthCheckModal: React.FC<PlantHealthCheckModalProps> = ({
 
   const handleStartAnalysis = async () => {
     if (!selectedImage) return;
+    setErrorMessage(null);
     setStep('analyzing');
 
     try {
       let imagePayload = selectedImage;
       if (selectedImage.startsWith('http')) {
-        // Convert remote URL to base64 for API if needed
+        // Convert remote URL to compressed base64 for fastest API inference
         try {
           const res = await fetch(selectedImage);
           const blob = await res.blob();
-          const reader = new FileReader();
-          const base64Promise = new Promise<string>((resolve) => {
-            reader.onload = () => resolve(reader.result as string);
-          });
-          reader.readAsDataURL(blob);
-          imagePayload = await base64Promise;
+          const opt = await optimizeImageForSpaceAnalysis(blob, { maxDimension: 1024, quality: 0.82 });
+          imagePayload = opt.dataUrl;
         } catch {
           imagePayload = selectedImage;
         }
@@ -115,8 +133,9 @@ export const PlantHealthCheckModal: React.FC<PlantHealthCheckModalProps> = ({
       setCurrentResult(diag);
       setStep('result');
       if (onDiagnosticComplete) onDiagnosticComplete(diag);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Health check failed', err);
+      setErrorMessage(err?.message || 'The diagnostic service encountered a temporary error. Please retry or pick another photo.');
       setStep('upload');
     }
   };
@@ -125,6 +144,8 @@ export const PlantHealthCheckModal: React.FC<PlantHealthCheckModalProps> = ({
     setSelectedImage(null);
     setUserNotes('');
     setCurrentResult(null);
+    setCompressionSummary(null);
+    setErrorMessage(null);
     setStep('upload');
   };
 
@@ -249,6 +270,23 @@ export const PlantHealthCheckModal: React.FC<PlantHealthCheckModalProps> = ({
                 </div>
               </div>
 
+              {/* Error Notification Banner if any issue occurred */}
+              {errorMessage && (
+                <div className="p-3 rounded-xl bg-rose-950/60 border border-rose-600/50 flex items-start gap-2.5 text-xs text-rose-200 animate-fadeIn">
+                  <ShieldAlert className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                  <div className="flex-1 space-y-1">
+                    <p className="font-semibold text-rose-300">Diagnostic Notice</p>
+                    <p className="text-slate-300 leading-relaxed">{errorMessage}</p>
+                  </div>
+                  <button
+                    onClick={() => setErrorMessage(null)}
+                    className="text-slate-400 hover:text-white p-1 rounded-lg"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
+
               {/* Upload Drop Zone / Preview */}
               <div className="space-y-3">
                 <input
@@ -267,33 +305,47 @@ export const PlantHealthCheckModal: React.FC<PlantHealthCheckModalProps> = ({
                   onChange={handleFileUpload}
                 />
 
-                {selectedImage ? (
-                  <div className="relative rounded-2xl overflow-hidden border-2 border-emerald-600/70 bg-black/60 aspect-video max-h-64 flex items-center justify-center">
-                    <img
-                      src={selectedImage}
-                      alt="Selected plant"
-                      className="w-full h-full object-cover"
-                    />
-                    <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent flex items-end p-4 justify-between">
-                      <span className="text-xs font-semibold text-white bg-slate-900/80 px-2.5 py-1 rounded-lg border border-slate-700">
-                        📸 Photo Compressed & Ready for AI Inspection
-                      </span>
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => cameraInputRef.current?.click()}
-                          className="text-xs px-2.5 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold shadow flex items-center gap-1 cursor-pointer"
-                        >
-                          <Camera className="w-3.5 h-3.5" />
-                          <span>Camera</span>
-                        </button>
-                        <button
-                          onClick={() => fileInputRef.current?.click()}
-                          className="text-xs px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-white font-bold border border-slate-600 cursor-pointer"
-                        >
-                          Gallery
-                        </button>
+                {isCompressing ? (
+                  <div className="border-2 border-dashed border-emerald-500/40 rounded-2xl p-8 text-center bg-emerald-950/20 space-y-3">
+                    <div className="w-10 h-10 rounded-full border-2 border-emerald-500 border-t-transparent animate-spin mx-auto" />
+                    <p className="text-xs font-semibold text-emerald-300">Optimizing photo resolution for rapid AI assessment...</p>
+                  </div>
+                ) : selectedImage ? (
+                  <div className="space-y-2">
+                    <div className="relative rounded-2xl overflow-hidden border-2 border-emerald-600/70 bg-black/60 aspect-video max-h-64 flex items-center justify-center">
+                      <img
+                        src={selectedImage}
+                        alt="Selected plant"
+                        className="w-full h-full object-cover"
+                      />
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent flex items-end p-4 justify-between">
+                        <span className="text-xs font-semibold text-white bg-slate-900/80 px-2.5 py-1 rounded-lg border border-slate-700 flex items-center gap-1.5">
+                          <Zap className="w-3.5 h-3.5 text-amber-400" />
+                          <span>Photo Ready for AI Inspection</span>
+                        </span>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => cameraInputRef.current?.click()}
+                            className="text-xs px-2.5 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold shadow flex items-center gap-1 cursor-pointer"
+                          >
+                            <Camera className="w-3.5 h-3.5" />
+                            <span>Camera</span>
+                          </button>
+                          <button
+                            onClick={() => fileInputRef.current?.click()}
+                            className="text-xs px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-white font-bold border border-slate-600 cursor-pointer"
+                          >
+                            Gallery
+                          </button>
+                        </div>
                       </div>
                     </div>
+                    {compressionSummary && (
+                      <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-950/60 border border-emerald-500/30 text-[11px] text-emerald-300">
+                        <Sparkles className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                        <span>{compressionSummary}</span>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <div className="border-2 border-dashed border-slate-700 rounded-2xl p-6 text-center bg-slate-950/40 space-y-4">
@@ -303,7 +355,7 @@ export const PlantHealthCheckModal: React.FC<PlantHealthCheckModalProps> = ({
                     <div>
                       <p className="text-sm font-bold text-white">Capture or Upload Plant Photo</p>
                       <p className="text-xs text-slate-400 mt-1">
-                        Images are automatically compressed for 20x faster AI diagnosis
+                        High-speed AI vision pipeline optimized for instant foliar assessment
                       </p>
                     </div>
                     <div className="grid grid-cols-2 gap-2 max-w-sm mx-auto pt-1">

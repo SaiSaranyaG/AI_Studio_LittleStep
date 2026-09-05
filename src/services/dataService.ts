@@ -17,11 +17,14 @@ import {
   CareTask,
   HealthDiagnostic,
   AirQualityBaseline,
+  AirTimelineEntry,
   PointTransaction,
   RewardItem,
   UserSustainabilityPreferences,
   UserPlantPreferences,
+  PlantJourneyMilestone,
 } from '../types';
+import { trackAnalyticsEvent } from './analyticsService';
 
 export type DataMode = 'mock' | 'cloud';
 
@@ -30,7 +33,7 @@ export const CURRENT_DATA_MODE: DataMode =
 
 /**
  * LittleStep Data Repository Layer
- * Manages persistence between React Context and Cloud Firestore subcollections.
+ * Manages persistence between React Context and Cloud Firestore subcollections & Google Cloud Analytics Tables.
  */
 
 // Helper to get user subcollection path
@@ -42,19 +45,69 @@ export const getUserDocRef = (uid: string, subcollection: string, docId: string)
   return doc(db, 'users', uid, subcollection, docId);
 };
 
+// Helper to sync record to Google Cloud backend tables for analytics
+async function syncToCloudBackend(tableName: string, record: Record<string, unknown>) {
+  try {
+    fetch(`/api/cloud/tables/${tableName}/sync`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(record),
+    }).catch(() => {});
+  } catch {
+    // Non-blocking background sync
+  }
+}
+
 // --------------------------------------------------------------------------
-// SPACES REPOSITORY
+// SPACES REPOSITORY (Google Cloud Table: spaces_stored)
 // --------------------------------------------------------------------------
 export async function saveSpaceToCloud(uid: string, space: SpaceProfile): Promise<void> {
   if (!uid || !space.id) return;
   try {
-    const spaceRef = getUserDocRef(uid, 'spaces', space.id);
-    await setDoc(spaceRef, {
+    const spaceData = {
       ...space,
       userId: uid,
       updatedAt: new Date().toISOString(),
       dataSource: 'cloud',
-    }, { merge: true });
+    };
+
+    // 1. User isolated subcollection
+    const spaceRef = getUserDocRef(uid, 'spaces', space.id);
+    await setDoc(spaceRef, spaceData, { merge: true });
+
+    // 2. Google Cloud table for spaces (analytics & recovery)
+    const globalSpaceRef = doc(db, 'spaces', space.id);
+    await setDoc(globalSpaceRef, spaceData, { merge: true }).catch(() => {});
+
+    // 3. Sync to Google Cloud analytics pipeline
+    syncToCloudBackend('spaces_stored', {
+      space_id: space.id,
+      user_id: uid,
+      space_name: space.name,
+      space_type: space.spaceType,
+      usable_area_sq_ft: space.usableAreaSqFt,
+      length_ft: space.lengthFt,
+      width_ft: space.widthFt,
+      plant_capacity_estimate: space.plantCapacityEstimate,
+      zones_json: JSON.stringify(space.zones || []),
+      created_at: space.lastScannedAt || new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      data_source: 'cloud',
+    });
+
+    // 4. Stream telemetry event
+    trackAnalyticsEvent({
+      eventType: 'space_stored',
+      userId: uid,
+      entityId: space.id,
+      entityType: 'space',
+      metadata: {
+        spaceName: space.name,
+        spaceType: space.spaceType,
+        usableAreaSqFt: space.usableAreaSqFt,
+        zonesCount: space.zones?.length || 0,
+      },
+    });
   } catch (error) {
     console.error('[DataService] Failed to save space to Firestore:', error);
     throw error;
@@ -66,6 +119,8 @@ export async function deleteSpaceFromCloud(uid: string, spaceId: string): Promis
   try {
     const spaceRef = getUserDocRef(uid, 'spaces', spaceId);
     await deleteDoc(spaceRef);
+    const globalSpaceRef = doc(db, 'spaces', spaceId);
+    await deleteDoc(globalSpaceRef).catch(() => {});
   } catch (error) {
     console.error('[DataService] Failed to delete space from Firestore:', error);
     throw error;
@@ -99,18 +154,67 @@ export function subscribeToUserSpaces(
 }
 
 // --------------------------------------------------------------------------
-// ADOPTIONS REPOSITORY
+// ADOPTIONS REPOSITORY (Google Cloud Table: plants_chosen)
 // --------------------------------------------------------------------------
 export async function saveAdoptionToCloud(uid: string, adoption: PlantAdoption): Promise<void> {
   if (!uid || !adoption.id) return;
   try {
-    const adoptionRef = getUserDocRef(uid, 'adoptions', adoption.id);
-    await setDoc(adoptionRef, {
+    const adoptionData = {
       ...adoption,
       userId: uid,
       updatedAt: new Date().toISOString(),
       dataSource: 'cloud',
-    }, { merge: true });
+    };
+
+    // 1. User isolated subcollection
+    const adoptionRef = getUserDocRef(uid, 'adoptions', adoption.id);
+    await setDoc(adoptionRef, adoptionData, { merge: true });
+
+    // 2. Google Cloud table for plants chosen
+    const globalPlantRef = doc(db, 'plants_chosen', adoption.id);
+    await setDoc(globalPlantRef, adoptionData, { merge: true }).catch(() => {});
+
+    // 3. Automatically sync any reached milestones for this plant
+    if (adoption.milestones && Array.isArray(adoption.milestones)) {
+      for (const m of adoption.milestones) {
+        if (m.isUnlocked || m.isCompleted) {
+          saveMilestoneToCloud(uid, m, adoption.nickname || adoption.speciesId, adoption.id).catch(() => {});
+        }
+      }
+    }
+
+    // 4. Sync to Google Cloud analytics pipeline
+    syncToCloudBackend('plants_chosen', {
+      adoption_id: adoption.id,
+      user_id: uid,
+      species_id: adoption.speciesId,
+      common_name: adoption.nickname || adoption.speciesId,
+      nickname: adoption.nickname,
+      space_id: adoption.spaceId,
+      zone_id: adoption.zoneId,
+      health_status: adoption.healthStatus,
+      streak_days: adoption.streakDays || 1,
+      total_survival_days: adoption.totalSurvivalDays || 1,
+      water_frequency_days: 7,
+      adopted_at: adoption.adoptedAt || new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      data_source: 'cloud',
+    });
+
+    // 5. Stream telemetry event
+    trackAnalyticsEvent({
+      eventType: 'plant_chosen',
+      userId: uid,
+      entityId: adoption.id,
+      entityType: 'plant',
+      metadata: {
+        speciesId: adoption.speciesId,
+        nickname: adoption.nickname,
+        spaceId: adoption.spaceId,
+        healthStatus: adoption.healthStatus,
+        streakDays: adoption.streakDays,
+      },
+    });
   } catch (error) {
     console.error('[DataService] Failed to save adoption to Firestore:', error);
     throw error;
@@ -122,6 +226,8 @@ export async function deleteAdoptionFromCloud(uid: string, adoptionId: string): 
   try {
     const adoptionRef = getUserDocRef(uid, 'adoptions', adoptionId);
     await deleteDoc(adoptionRef);
+    const globalPlantRef = doc(db, 'plants_chosen', adoptionId);
+    await deleteDoc(globalPlantRef).catch(() => {});
   } catch (error) {
     console.error('[DataService] Failed to delete adoption from Firestore:', error);
     throw error;
@@ -151,6 +257,69 @@ export function subscribeToUserAdoptions(
   } catch (err) {
     console.error('[DataService] Could not establish adoptions snapshot:', err);
     return null;
+  }
+}
+
+// --------------------------------------------------------------------------
+// MILESTONES REPOSITORY (Google Cloud Table: milestones_reached)
+// --------------------------------------------------------------------------
+export async function saveMilestoneToCloud(
+  uid: string,
+  milestone: PlantJourneyMilestone,
+  plantNickname?: string,
+  adoptionId?: string
+): Promise<void> {
+  if (!uid || !milestone.title) return;
+  try {
+    const milestoneId = `milestone_${uid}_${adoptionId || 'general'}_day${milestone.day}`;
+    const milestoneData = {
+      id: milestoneId,
+      ...milestone,
+      adoptionId: adoptionId || null,
+      userId: uid,
+      plantName: plantNickname || 'Plant Companion',
+      updatedAt: new Date().toISOString(),
+      dataSource: 'cloud',
+    };
+
+    // 1. User subcollection
+    const userMilestoneRef = getUserDocRef(uid, 'milestones', milestoneId);
+    await setDoc(userMilestoneRef, milestoneData, { merge: true });
+
+    // 2. Google Cloud table for milestones reached
+    const globalMilestoneRef = doc(db, 'milestones_reached', milestoneId);
+    await setDoc(globalMilestoneRef, milestoneData, { merge: true }).catch(() => {});
+
+    // 3. Sync to Google Cloud analytics pipeline
+    syncToCloudBackend('milestones_reached', {
+      milestone_id: milestoneId,
+      user_id: uid,
+      adoption_id: adoptionId || null,
+      plant_name: plantNickname || 'Plant Companion',
+      milestone_key: `day_${milestone.day}`,
+      title: milestone.title,
+      description: milestone.description || '',
+      points_awarded: milestone.pointsAwarded || 20,
+      category: 'growth',
+      achieved_at: milestone.completedAt || new Date().toISOString(),
+      data_source: 'cloud',
+    });
+
+    // 4. Stream telemetry event
+    trackAnalyticsEvent({
+      eventType: 'milestone_reached',
+      userId: uid,
+      entityId: milestoneId,
+      entityType: 'milestone',
+      metadata: {
+        title: milestone.title,
+        pointsAwarded: milestone.pointsAwarded,
+        plantName: plantNickname,
+        day: milestone.day,
+      },
+    });
+  } catch (error) {
+    console.error('[DataService] Failed to save milestone to Firestore:', error);
   }
 }
 
@@ -302,18 +471,101 @@ export function subscribeToUserAirBaseline(
 }
 
 // --------------------------------------------------------------------------
-// POINTS TRANSACTIONS REPOSITORY
+// AIR TIMELINE REPOSITORY
+// --------------------------------------------------------------------------
+export async function saveAirTimelineEntryToCloud(uid: string, entry: AirTimelineEntry): Promise<void> {
+  if (!uid || !entry.id) return;
+  try {
+    const entryRef = getUserDocRef(uid, 'air_timeline', entry.id);
+    await setDoc(
+      entryRef,
+      {
+        ...entry,
+        userId: uid,
+        updatedAt: new Date().toISOString(),
+        dataSource: 'cloud',
+      },
+      { merge: true }
+    );
+  } catch (error) {
+    console.error('[DataService] Failed to save air timeline entry to Firestore:', error);
+  }
+}
+
+export function subscribeToUserAirTimeline(
+  uid: string,
+  onData: (timeline: AirTimelineEntry[]) => void
+): Unsubscribe | null {
+  if (!uid) return null;
+  try {
+    const timelineRef = getUserSubcollectionRef(uid, 'air_timeline');
+    return onSnapshot(
+      timelineRef,
+      (snapshot) => {
+        const list: AirTimelineEntry[] = [];
+        snapshot.forEach((docSnap) => {
+          list.push(docSnap.data() as AirTimelineEntry);
+        });
+        if (list.length > 0) {
+          list.sort((a, b) => a.dayNumber - b.dayNumber);
+          onData(list);
+        }
+      },
+      (error) => {
+        console.error('[DataService] Error subscribing to air timeline:', error);
+      }
+    );
+  } catch (err) {
+    console.error('[DataService] Could not establish air timeline snapshot:', err);
+    return null;
+  }
+}
+
+// --------------------------------------------------------------------------
+// POINTS TRANSACTIONS REPOSITORY (Google Cloud Table: points_scored)
 // --------------------------------------------------------------------------
 export async function savePointTransactionToCloud(uid: string, tx: PointTransaction): Promise<void> {
   if (!uid || !tx.id) return;
   try {
-    const txRef = getUserDocRef(uid, 'points_transactions', tx.id);
-    await setDoc(txRef, {
+    const txData = {
       ...tx,
       userId: uid,
       recordedAt: new Date().toISOString(),
       dataSource: 'cloud',
-    }, { merge: true });
+    };
+
+    // 1. User subcollection
+    const txRef = getUserDocRef(uid, 'points_transactions', tx.id);
+    await setDoc(txRef, txData, { merge: true });
+
+    // 2. Google Cloud table for points scored
+    const globalPointsRef = doc(db, 'points_scored', tx.id);
+    await setDoc(globalPointsRef, txData, { merge: true }).catch(() => {});
+
+    // 3. Sync to Google Cloud analytics pipeline
+    syncToCloudBackend('points_scored', {
+      transaction_id: tx.id,
+      user_id: uid,
+      action_type: tx.actionType,
+      points: tx.points,
+      reason: tx.description,
+      recorded_at: tx.timestamp || new Date().toISOString(),
+      verified: tx.verifiedServerSide ?? true,
+      data_source: 'cloud',
+    });
+
+    // 4. Stream telemetry event
+    trackAnalyticsEvent({
+      eventType: 'points_scored',
+      userId: uid,
+      entityId: tx.id,
+      entityType: 'points',
+      metadata: {
+        actionType: tx.actionType,
+        amount: tx.points,
+        description: tx.description,
+      },
+    });
   } catch (error) {
     console.error('[DataService] Failed to save point transaction to Firestore:', error);
     throw error;
@@ -347,13 +599,14 @@ export function subscribeToUserPointsTransactions(
 }
 
 // --------------------------------------------------------------------------
-// REWARD REDEMPTIONS REPOSITORY
+// REWARD REDEMPTIONS REPOSITORY (Google Cloud Table: rewards_redeemed)
 // --------------------------------------------------------------------------
 export async function saveRewardRedemptionToCloud(uid: string, reward: RewardItem): Promise<void> {
   if (!uid || !reward.id) return;
   try {
-    const rewardRef = getUserDocRef(uid, 'reward_redemptions', reward.id);
-    await setDoc(rewardRef, {
+    const redemptionId = `redemption_${uid}_${reward.id}`;
+    const rewardData = {
+      id: redemptionId,
       rewardId: reward.id,
       title: reward.title,
       category: reward.category,
@@ -362,7 +615,41 @@ export async function saveRewardRedemptionToCloud(uid: string, reward: RewardIte
       redeemedAt: reward.redeemedAt || new Date().toISOString(),
       userId: uid,
       dataSource: 'cloud',
-    }, { merge: true });
+    };
+
+    // 1. User subcollection
+    const rewardRef = getUserDocRef(uid, 'reward_redemptions', reward.id);
+    await setDoc(rewardRef, rewardData, { merge: true });
+
+    // 2. Google Cloud table for rewards redeemed
+    const globalRewardRef = doc(db, 'rewards_redeemed', redemptionId);
+    await setDoc(globalRewardRef, rewardData, { merge: true }).catch(() => {});
+
+    // 3. Sync to Google Cloud analytics pipeline
+    syncToCloudBackend('rewards_redeemed', {
+      redemption_id: redemptionId,
+      user_id: uid,
+      reward_id: reward.id,
+      reward_title: reward.title,
+      category: reward.category,
+      points_cost: reward.pointsCost,
+      is_redeemed: true,
+      redeemed_at: reward.redeemedAt || new Date().toISOString(),
+      data_source: 'cloud',
+    });
+
+    // 4. Stream telemetry event
+    trackAnalyticsEvent({
+      eventType: 'reward_redeemed',
+      userId: uid,
+      entityId: reward.id,
+      entityType: 'reward',
+      metadata: {
+        rewardTitle: reward.title,
+        pointsCost: reward.pointsCost,
+        category: reward.category,
+      },
+    });
   } catch (error) {
     console.error('[DataService] Failed to save reward redemption to Firestore:', error);
     throw error;
@@ -396,6 +683,48 @@ export function subscribeToUserRewardRedemptions(
     console.error('[DataService] Could not establish rewards snapshot:', err);
     return null;
   }
+}
+
+// --------------------------------------------------------------------------
+// GOOGLE CLOUD TABLES QUERY ACCESS & ANALYTICS FETCH
+// --------------------------------------------------------------------------
+export interface UserCloudTablesExport {
+  spaces: SpaceProfile[];
+  plantsChosen: PlantAdoption[];
+  milestonesReached: PlantJourneyMilestone[];
+  rewardsRedeemed: Array<{ rewardId: string; title: string; pointsCost: number; redeemedAt: string }>;
+  pointsScored: PointTransaction[];
+}
+
+export async function fetchUserCloudTables(uid: string): Promise<UserCloudTablesExport> {
+  const result: UserCloudTablesExport = {
+    spaces: [],
+    plantsChosen: [],
+    milestonesReached: [],
+    rewardsRedeemed: [],
+    pointsScored: [],
+  };
+  if (!uid) return result;
+
+  try {
+    const [spacesSnap, plantsSnap, milestonesSnap, rewardsSnap, pointsSnap] = await Promise.all([
+      getDocs(getUserSubcollectionRef(uid, 'spaces')),
+      getDocs(getUserSubcollectionRef(uid, 'adoptions')),
+      getDocs(getUserSubcollectionRef(uid, 'milestones')),
+      getDocs(getUserSubcollectionRef(uid, 'reward_redemptions')),
+      getDocs(getUserSubcollectionRef(uid, 'points_transactions')),
+    ]);
+
+    spacesSnap.forEach((d) => result.spaces.push(d.data() as SpaceProfile));
+    plantsSnap.forEach((d) => result.plantsChosen.push(d.data() as PlantAdoption));
+    milestonesSnap.forEach((d) => result.milestonesReached.push(d.data() as PlantJourneyMilestone));
+    rewardsSnap.forEach((d) => result.rewardsRedeemed.push(d.data() as any));
+    pointsSnap.forEach((d) => result.pointsScored.push(d.data() as PointTransaction));
+  } catch (err) {
+    console.warn('[DataService] Failed to query user cloud tables:', err);
+  }
+
+  return result;
 }
 
 // --------------------------------------------------------------------------

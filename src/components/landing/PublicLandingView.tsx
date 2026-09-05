@@ -10,6 +10,7 @@ import {
   Droplet,
   Compass,
   ArrowRight,
+  ArrowLeft,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
@@ -20,6 +21,7 @@ import {
   Smile,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
+import { useApp } from '../../context/AppContext';
 
 // Lifestyle photographic assets
 import heroHomeImg from '../../assets/images/hero_home_plant_1788194363237.jpg';
@@ -293,7 +295,8 @@ const RELATABLE_SPACES = [
 ];
 
 export const PublicLandingView: React.FC = () => {
-  const { openAuthModal } = useAuth();
+  const { user, openAuthModal } = useAuth();
+  const { setActiveTab } = useApp();
 
   // Active Story Player State
   const [activeStoryIndex, setActiveStoryIndex] = useState(0);
@@ -339,6 +342,26 @@ export const PublicLandingView: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-[#FAF7F2] text-[#243324] font-sans selection:bg-[#5B8C51]/20">
+      {/* Top Floating Return Banner for Logged-In Users */}
+      {user && (
+        <div className="bg-[#EFEAE1] border-b border-[#1E2B1E]/10 py-2.5 px-4 sm:px-6 sticky top-16 sm:top-20 z-30 shadow-xs">
+          <div className="max-w-6xl mx-auto flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-xs sm:text-sm font-medium text-[#243324]">
+              <span className="w-2 h-2 rounded-full bg-[#5B8C51] inline-block" />
+              <span>Exploring LittleStep inspiration & stories</span>
+            </div>
+            <button
+              id="explore-top-back-btn"
+              onClick={() => setActiveTab('dashboard')}
+              className="py-1.5 px-3.5 rounded-full bg-[#3D6636] hover:bg-[#32542c] text-white text-xs sm:text-sm font-bold shadow-xs flex items-center gap-1.5 transition-all cursor-pointer hover:scale-[1.02] active:scale-[0.98]"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" />
+              <span>Back to Home Page</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* 1. HERO SECTION — RELATABLE HOME & HUMAN-CENTERED INTRODUCTION */}
       <section className="relative pt-6 sm:pt-12 pb-16 sm:pb-24 px-4 sm:px-6 lg:px-8 max-w-6xl mx-auto">
         <div className="text-center max-w-3xl mx-auto space-y-5">
@@ -364,22 +387,35 @@ export const PublicLandingView: React.FC = () => {
 
           {/* Primary & Secondary Call to Action */}
           <div className="pt-3 flex flex-col sm:flex-row items-center justify-center gap-4">
-            <button
-              id="hero-create-littlestep-btn"
-              onClick={() => openAuthModal('register')}
-              className="w-full sm:w-auto py-4 px-8 rounded-full bg-[#3D6636] hover:bg-[#32542c] text-white font-bold text-base shadow-lg shadow-[#3D6636]/20 hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer flex items-center justify-center gap-2.5 group"
-            >
-              <Sprout className="w-5 h-5 group-hover:rotate-12 transition-transform" />
-              <span>🌱 Create Your LittleStep</span>
-            </button>
+            {user ? (
+              <button
+                id="hero-back-to-home-btn"
+                onClick={() => setActiveTab('dashboard')}
+                className="w-full sm:w-auto py-4 px-9 rounded-full bg-[#3D6636] hover:bg-[#32542c] text-white font-bold text-base shadow-lg shadow-[#3D6636]/20 hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer flex items-center justify-center gap-2.5 group"
+              >
+                <ArrowLeft className="w-5 h-5 group-hover:-translate-x-1 transition-transform" />
+                <span>Back to Home Page</span>
+              </button>
+            ) : (
+              <>
+                <button
+                  id="hero-create-littlestep-btn"
+                  onClick={() => openAuthModal('register')}
+                  className="w-full sm:w-auto py-4 px-8 rounded-full bg-[#3D6636] hover:bg-[#32542c] text-white font-bold text-base shadow-lg shadow-[#3D6636]/20 hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer flex items-center justify-center gap-2.5 group"
+                >
+                  <Sprout className="w-5 h-5 group-hover:rotate-12 transition-transform" />
+                  <span>🌱 Create Your LittleStep</span>
+                </button>
 
-            <button
-              id="hero-sign-in-subtle-btn"
-              onClick={() => openAuthModal('login')}
-              className="py-2.5 px-5 text-sm font-semibold text-[#3A4A3A] hover:text-[#1E2B1E] transition-colors cursor-pointer"
-            >
-              Already growing with us? <span className="underline font-bold">Sign in</span>
-            </button>
+                <button
+                  id="hero-sign-in-subtle-btn"
+                  onClick={() => openAuthModal('login')}
+                  className="py-2.5 px-5 text-sm font-semibold text-[#3A4A3A] hover:text-[#1E2B1E] transition-colors cursor-pointer"
+                >
+                  Already growing with us? <span className="underline font-bold">Sign in</span>
+                </button>
+              </>
+            )}
           </div>
         </div>
 
@@ -588,11 +624,17 @@ export const PublicLandingView: React.FC = () => {
                 </div>
 
                 <button
-                  onClick={() => openAuthModal('register')}
+                  onClick={() => {
+                    if (user) {
+                      setActiveTab('dashboard');
+                    } else {
+                      openAuthModal('register');
+                    }
+                  }}
                   className="py-2.5 px-5 rounded-full bg-[#5B8C51] hover:bg-[#4d7844] text-white font-bold text-xs shadow-sm transition-all cursor-pointer flex items-center gap-1.5"
                 >
-                  <Sprout className="w-3.5 h-3.5" />
-                  <span>Start This Step</span>
+                  {user ? <ArrowLeft className="w-3.5 h-3.5" /> : <Sprout className="w-3.5 h-3.5" />}
+                  <span>{user ? 'Back to Home Page' : 'Start This Step'}</span>
                 </button>
               </div>
             </div>
@@ -637,10 +679,16 @@ export const PublicLandingView: React.FC = () => {
               <div className="mt-4 pt-3 border-t border-[#1E2B1E]/5 flex items-center justify-between">
                 <span className="text-[11px] text-[#3A4A3A]/70">1 Companion Match</span>
                 <button
-                  onClick={() => openAuthModal('register')}
+                  onClick={() => {
+                    if (user) {
+                      setActiveTab('dashboard');
+                    } else {
+                      openAuthModal('register');
+                    }
+                  }}
                   className="text-xs font-bold text-[#1E2B1E] hover:text-[#5B8C51] flex items-center gap-1 cursor-pointer"
                 >
-                  <span>Explore</span>
+                  <span>{user ? 'Back to Home' : 'Explore'}</span>
                   <ArrowRight className="w-3 h-3" />
                 </button>
               </div>
@@ -719,26 +767,41 @@ export const PublicLandingView: React.FC = () => {
         </div>
 
         <p className="text-sm sm:text-base text-[#3A4A3A] max-w-md mx-auto leading-relaxed">
-          Join thousands of everyday caretakers turning small corners into living, breathing sanctuaries.
+          {user
+            ? "Ready to return to your green sanctuary and check on today's plant care?"
+            : "Join thousands of everyday caretakers turning small corners into living, breathing sanctuaries."}
         </p>
 
         <div className="pt-4 flex flex-col sm:flex-row items-center justify-center gap-4">
-          <button
-            id="footer-create-littlestep-btn"
-            onClick={() => openAuthModal('register')}
-            className="w-full sm:w-auto py-4 px-9 rounded-full bg-[#3D6636] hover:bg-[#32542c] text-white font-bold text-base shadow-lg shadow-[#3D6636]/20 hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer flex items-center justify-center gap-2.5"
-          >
-            <Sprout className="w-5 h-5" />
-            <span>🌱 Create Your LittleStep</span>
-          </button>
+          {user ? (
+            <button
+              id="footer-back-to-home-btn"
+              onClick={() => setActiveTab('dashboard')}
+              className="w-full sm:w-auto py-4 px-9 rounded-full bg-[#3D6636] hover:bg-[#32542c] text-white font-bold text-base shadow-lg shadow-[#3D6636]/20 hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer flex items-center justify-center gap-2.5 group"
+            >
+              <ArrowLeft className="w-5 h-5 group-hover:-translate-x-1 transition-transform" />
+              <span>Back to Home Page</span>
+            </button>
+          ) : (
+            <>
+              <button
+                id="footer-create-littlestep-btn"
+                onClick={() => openAuthModal('register')}
+                className="w-full sm:w-auto py-4 px-9 rounded-full bg-[#3D6636] hover:bg-[#32542c] text-white font-bold text-base shadow-lg shadow-[#3D6636]/20 hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer flex items-center justify-center gap-2.5"
+              >
+                <Sprout className="w-5 h-5" />
+                <span>🌱 Create Your LittleStep</span>
+              </button>
 
-          <button
-            id="footer-sign-in-subtle-btn"
-            onClick={() => openAuthModal('login')}
-            className="py-2.5 px-5 text-sm font-semibold text-[#3A4A3A] hover:text-[#1E2B1E] transition-colors cursor-pointer"
-          >
-            Already growing with us? <span className="underline font-bold">Sign in</span>
-          </button>
+              <button
+                id="footer-sign-in-subtle-btn"
+                onClick={() => openAuthModal('login')}
+                className="py-2.5 px-5 text-sm font-semibold text-[#3A4A3A] hover:text-[#1E2B1E] transition-colors cursor-pointer"
+              >
+                Already growing with us? <span className="underline font-bold">Sign in</span>
+              </button>
+            </>
+          )}
         </div>
       </section>
     </div>

@@ -9,6 +9,8 @@ import {
   HealthDiagnostic,
   AirQualityBaseline,
   AirTimelineEntry,
+  RoomSensorReadings,
+  AiSensorAnalysis,
   PointTransaction,
   RewardItem,
   AgentLogEntry,
@@ -23,6 +25,8 @@ import {
   LittleStepImpactProfile,
   CommunityImpactStats,
   ImpactClaimValidation,
+  PlantHealthStatus,
+  HealthConfidence,
 } from '../types';
 import { SAMPLE_SPACES, INITIAL_BASELINE, SAMPLE_AIR_TIMELINE, REWARD_CATALOG } from '../data/mockData';
 import { PLANT_CATALOG } from '../data/plantCatalog';
@@ -42,6 +46,8 @@ import {
   subscribeToUserDiagnostics,
   saveAirBaselineToCloud,
   subscribeToUserAirBaseline,
+  saveAirTimelineEntryToCloud,
+  subscribeToUserAirTimeline,
   savePointTransactionToCloud,
   subscribeToUserPointsTransactions,
   saveRewardRedemptionToCloud,
@@ -53,6 +59,13 @@ import {
 } from '../services/dataService';
 import { uploadImageToStorage } from '../services/storageService';
 import { trackAnalyticsEvent } from '../services/analyticsService';
+import { optimizeImageForSpaceAnalysis, compressImageQuick } from '../utils/imageCompression';
+import {
+  generateBotanicalRecommendation,
+  calculateBotanicalScorecard,
+  matchesPlantCategory,
+  scorecardToBreakdown,
+} from '../utils/botanicalScoring';
 
 
 interface AppContextType {
@@ -66,7 +79,18 @@ interface AppContextType {
   setActiveSpace: (space: SpaceProfile) => void;
   isScanningSpace: boolean;
   scanSpacePhoto: (imageBase64: string, spaceType: string, referenceBenchmark?: string) => Promise<SpaceProfile>;
-  confirmSpace: (spaceId: string, lengthFt: number, widthFt: number, zones: SpaceZone[]) => void;
+  confirmSpace: (
+    spaceId: string,
+    lengthFt: number,
+    widthFt: number,
+    zones: SpaceZone[],
+    extra?: {
+      name?: string;
+      spaceType?: SpaceProfile['spaceType'];
+      lightingClassification?: 'DIRECT' | 'BRIGHT_INDIRECT' | 'MEDIUM' | 'LOW' | 'INSUFFICIENT_DATA';
+      estimatedHoursOfUsableLight?: number | null;
+    }
+  ) => void;
   addOrUpdateZone: (spaceId: string, zone: SpaceZone) => void;
 
   // Plant Management & Adoptions
@@ -120,6 +144,14 @@ interface AppContextType {
   addAirLogEntry: (
     entry: Omit<AirTimelineEntry, 'id' | 'dayNumber' | 'date'>
   ) => Promise<void>;
+  isAnalyzingAir: boolean;
+  runAiAirEnvironmentAnalysis: (payload: {
+    sensorReadings: RoomSensorReadings;
+    activePlants?: any[];
+    spaceContext?: any;
+    sensorImageBase64?: string;
+    userNotes?: string;
+  }) => Promise<AiSensorAnalysis>;
 
   // Rewards & Verified Ledger
   totalPoints: number;
@@ -364,6 +396,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return headers;
   };
 
+  // Safe JSON response parser that prevents raw HTML parse crashes (e.g. proxy 502/504 errors)
+  const safeParseResponse = async <T = any>(res: Response, fallbackContext = 'request'): Promise<T> => {
+    const rawText = await res.text();
+    let data: any = null;
+    try {
+      data = JSON.parse(rawText);
+    } catch {
+      if (rawText.includes('<!doctype') || rawText.includes('<html')) {
+        throw new Error(`The service is currently starting up or reloading. Please try again in a moment.`);
+      }
+      throw new Error(`Invalid server response format for ${fallbackContext}.`);
+    }
+    return data as T;
+  };
+
   // Spaces
   const [spaces, setSpaces] = useState<SpaceProfile[]>(() => {
     if (CURRENT_DATA_MODE === 'mock') {
@@ -590,10 +637,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setDiagnostics(cloudDiags || []);
     });
 
-    // 5. Subscribe to Air Baseline
+    // 5. Subscribe to Air Baseline & Timeline
     const unsubBaseline = subscribeToUserAirBaseline(user.uid, (cloudBaseline) => {
       if (cloudBaseline) {
         setBaseline(cloudBaseline);
+      }
+    });
+
+    const unsubAirTimeline = subscribeToUserAirTimeline(user.uid, (cloudTimeline) => {
+      if (cloudTimeline && cloudTimeline.length > 0) {
+        setAirTimeline(cloudTimeline);
       }
     });
 
@@ -637,6 +690,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       unsubTasks?.();
       unsubDiags?.();
       unsubBaseline?.();
+      unsubAirTimeline?.();
       unsubTx?.();
       unsubRewards?.();
     };
@@ -683,7 +737,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           description,
         }),
       });
-      const data = await res.json();
+      const data = await safeParseResponse(res, 'points verification');
       if (res.ok && data.success) {
         setTotalPoints(data.newTotal);
         const newTx: PointTransaction = {
@@ -734,40 +788,58 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     referenceBenchmark?: string
   ): Promise<SpaceProfile> => {
     setIsScanningSpace(true);
+    console.log('[SpaceAnalyzer] submit started');
     addAgentLog('Space Assessment Agent', `Initiating multimodal perception scan on ${spaceType} photograph`, {
       spaceType,
       referenceBenchmark: referenceBenchmark || 'Auto-calibrating via doorway/railing cues',
     });
 
     try {
+      // Lightweight client-side image downscaling/compression to minimize payload and Gemini latency
+      const optimized = await optimizeImageForSpaceAnalysis(imageBase64, {
+        maxDimension: 1024,
+        quality: 0.82,
+      });
+      const optimizedImageBase64 = optimized.dataUrl;
+      console.log(`[SpaceAnalyzer] Frontend compression applied: ${optimized.summary}`);
+
       const headers = await getAuthHeaders();
       const res = await fetch('/api/agents/space-scan', {
         method: 'POST',
         headers,
         body: JSON.stringify({
-          imageBase64,
+          imageBase64: optimizedImageBase64,
+          mimeType: optimized.mimeType || 'image/jpeg',
           spaceType,
           referenceBenchmark,
         }),
       });
-      const data = await res.json();
+
+      const data = await safeParseResponse(res, 'space scan');
       if (!res.ok || !data?.success) {
         throw new Error(data?.message || data?.error || 'Space scan analysis could not be completed.');
       }
+
+      console.log('[SpaceAnalyzer] result received');
       const result = data?.data || {};
 
       const spaceId = `space-${Date.now()}`;
-      let cloudPhotoUrl = imageBase64;
+      const cloudPhotoUrl = optimizedImageBase64;
 
+      // Upload image to cloud storage in the background without blocking the UI
       if (user?.uid) {
-        try {
-          const uploadRes = await uploadImageToStorage(imageBase64, 'spaces', spaceId, user.uid);
-          if (uploadRes?.url) {
-            cloudPhotoUrl = uploadRes.url;
-          }
-        } catch (uploadErr) {
-          console.warn('[Space Scan] Cloud Storage upload notice:', uploadErr);
-        }
+        uploadImageToStorage(optimizedImageBase64, 'spaces', spaceId, user.uid)
+          .then((uploadRes) => {
+            if (uploadRes?.url) {
+              setSpaces((prev) =>
+                prev.map((s) => (s.id === spaceId ? { ...s, photoUrl: uploadRes.url } : s))
+              );
+              setActiveSpace((curr) => (curr?.id === spaceId ? { ...curr, photoUrl: uploadRes.url } : curr));
+            }
+          })
+          .catch((uploadErr) => {
+            console.warn('[Space Scan] Cloud Storage background upload notice:', uploadErr);
+          });
       }
 
       const normalizeCoordinate = (val: any, fallback: number) => {
@@ -777,22 +849,65 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return Math.min(100, Math.max(0, Math.round(num)));
       };
 
+      const detectedName =
+        result.spaceName ||
+        result.space_name ||
+        (result.isIndoor
+          ? 'Sunlit Indoor Room'
+          : result.spaceType === 'balcony'
+          ? 'Sunny Balcony'
+          : 'Scanned Green Space');
+
+      const detectedSpaceType = (
+        result.space_type ||
+        result.spaceType ||
+        (result.isIndoor ? 'indoor_room' : spaceType === 'auto' ? 'indoor_room' : spaceType)
+      ) as SpaceProfile['spaceType'];
+
       const newSpace: SpaceProfile = {
         id: spaceId,
-        name: `Scanned ${spaceType.charAt(0).toUpperCase() + spaceType.slice(1)}`,
-        spaceType: result.space_type || spaceType,
-        lengthFt: result.estimated_length_ft || 7.5,
-        widthFt: result.estimated_width_ft || 4.5,
-        usableAreaSqFt: result.usable_area_sqft || 24,
+        name: detectedName,
+        spaceType: detectedSpaceType,
+        lengthFt: result.estimated_length_ft || (detectedSpaceType === 'balcony' ? 7.5 : 12.0),
+        widthFt: result.estimated_width_ft || (detectedSpaceType === 'balcony' ? 4.5 : 9.5),
+        usableAreaSqFt: result.usable_area_sqft || (detectedSpaceType === 'balcony' ? 24 : 85),
         confidence: result.confidence || 0.85,
         measurementMethod: result.measurement_method || 'visual_estimation',
-        requiresConfirmation: result.requires_user_confirmation ?? true,
-        plantCapacityEstimate: result.plant_capacity_estimate || 6,
+        requiresConfirmation: result.requires_user_confirmation ?? (result.confidence < 0.85),
+        plantCapacityEstimate: result.plant_capacity_estimate || (detectedSpaceType === 'balcony' ? 6 : 8),
         currentUtilizationPct: 0,
         photoUrl: cloudPhotoUrl,
-        safetyWarnings: result.safety_warnings || [],
+        safetyWarnings: result.safety_warnings || result.warnings || [],
         referenceBenchmark: referenceBenchmark || result.confirmation_prompt,
         lastScannedAt: new Date().toISOString(),
+        analysis: {
+          overallStatus: result.overallStatus || 'MODERATE',
+          spaceType: detectedSpaceType,
+          lighting: result.lighting || {
+            classification: 'BRIGHT_INDIRECT',
+            estimatedHoursOfUsableLight: null,
+            directSunlightVisible: false,
+            windowsVisible: true,
+            windowCount: 1,
+            lightEvidence: 'Analyzed via visible reflections.',
+          },
+          placement: result.placement || {
+            bestAreas: ['Near natural light sources.'],
+            avoidAreas: ['Drafty spots or direct heat sources.'],
+          },
+          environment: result.environment || {
+            humidityAssessment: 'Moderate indoor room humidity.',
+            airflowAssessment: 'Standard room air circulation.',
+            temperature: null,
+          },
+          plantRecommendations: result.plantRecommendations || [],
+          warnings: result.warnings || [],
+          confidence: result.confidence || 0.85,
+          sunlightStatus: result.sunlightStatus || 'Moderate',
+          lightType: result.lightType || 'Bright indirect',
+          evidence: result.evidence || '',
+          limitations: result.limitations || 'Exact photoperiod and seasonal shifts cannot be determined from a single photo.',
+        },
         zones: (result.zones || []).map((z: any, idx: number) => ({
           id: z.id || `zone-${idx + 1}`,
           name: z.name || `Zone ${idx + 1}`,
@@ -812,15 +927,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setActiveSpace(newSpace);
 
       if (user?.uid) {
-        saveSpaceToCloud(user.uid, newSpace).catch((err) =>
-          console.warn('Space cloud save failed:', err)
-        );
+        saveSpaceToCloud(user.uid, newSpace).catch((err) => {
+          console.warn('[SpaceAnalyzer] Space cloud save notice (non-fatal):', err);
+        });
       }
 
       addAgentLog(
         'Space Assessment Agent',
-        `Space mapped successfully: ${newSpace.usableAreaSqFt} sq.ft usable area, estimated capacity ${newSpace.plantCapacityEstimate} plants`,
+        `Space mapped successfully: "${newSpace.name}" (${newSpace.spaceType}), ${newSpace.usableAreaSqFt} sq.ft usable area, estimated capacity ${newSpace.plantCapacityEstimate} plants`,
         {
+          spaceName: newSpace.name,
+          spaceType: newSpace.spaceType,
           usableAreaSqFt: newSpace.usableAreaSqFt,
           confidence: newSpace.confidence,
           zonesCount: newSpace.zones.length,
@@ -836,78 +953,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
 
       return newSpace;
-    } catch (err) {
-      console.warn('Space scan fallback activated:', err);
-      const fallbackSpace: SpaceProfile = {
-        id: `space-${Date.now()}`,
-        name: `Scanned ${spaceType.charAt(0).toUpperCase() + spaceType.slice(1)} (Heuristic Estimate)`,
-        spaceType: (spaceType as SpaceProfile['spaceType']) || 'balcony',
-        lengthFt: 7.5,
-        widthFt: 4.5,
-        usableAreaSqFt: 25.3,
-        confidence: 0.5,
-        measurementMethod: 'visual_estimation',
-        requiresConfirmation: true,
-        plantCapacityEstimate: 6,
-        currentUtilizationPct: 0,
-        photoUrl: imageBase64,
-        safetyWarnings: ['Ensure pots have stable drainage saucers.'],
-        referenceBenchmark: referenceBenchmark || 'Estimated via standard architectural heuristics.',
-        lastScannedAt: new Date().toISOString(),
-        isFallback: true,
-        dataSource: 'heuristic_fallback',
-        zones: [
-          {
-            id: 'zone-1-sun',
-            name: 'Zone A (Window / Railing Sun)',
-            zoneType: 'plant_zone',
-            lightLevel: 'bright_indirect',
-            color: '#f59e0b',
-            x: 12,
-            y: 12,
-            w: 48,
-            h: 32,
-            recommendedSize: 'medium',
-            notes: 'Highest light exposure.',
-          },
-          {
-            id: 'zone-2-ambient',
-            name: 'Zone B (Shaded Floor Stand)',
-            zoneType: 'plant_zone',
-            lightLevel: 'medium_indirect',
-            color: '#10b981',
-            x: 64,
-            y: 12,
-            w: 28,
-            h: 36,
-            recommendedSize: 'small',
-            notes: 'Gentle ambient illumination.',
-          },
-        ],
-      };
-      setSpaces((prev) => [fallbackSpace, ...prev]);
-      setActiveSpace(fallbackSpace);
-
-      if (user?.uid) {
-        saveSpaceToCloud(user.uid, fallbackSpace).catch((err) =>
-          console.error('Fallback space cloud save failed:', err)
-        );
-      }
-
+    } catch (err: any) {
+      console.error('[SpaceAnalyzer] Space scan analysis failed:', err);
       addAgentLog(
         'Space Assessment Agent',
-        `Space mapped using rule-based architectural heuristics (multimodal AI service unavailable)`,
-        { isFallback: true, usableAreaSqFt: fallbackSpace.usableAreaSqFt },
+        `Space analysis failed: ${err?.message || 'Vision model error'}`,
+        { error: err?.message },
         'warning'
       );
-
-      return fallbackSpace;
+      throw err;
     } finally {
       setIsScanningSpace(false);
     }
   };
 
-  const confirmSpace = (spaceId: string, lengthFt: number, widthFt: number, zones: SpaceZone[]) => {
+  const confirmSpace = (
+    spaceId: string,
+    lengthFt: number,
+    widthFt: number,
+    zones: SpaceZone[],
+    extra?: {
+      name?: string;
+      spaceType?: SpaceProfile['spaceType'];
+      lightingClassification?: 'DIRECT' | 'BRIGHT_INDIRECT' | 'MEDIUM' | 'LOW' | 'INSUFFICIENT_DATA';
+      estimatedHoursOfUsableLight?: number | null;
+    }
+  ) => {
     const usableArea = Math.round(lengthFt * widthFt * 0.75 * 10) / 10;
     const capacity = Math.max(2, Math.round(usableArea / 3.5));
 
@@ -916,6 +987,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (s.id === spaceId) {
           const updated: SpaceProfile = {
             ...s,
+            ...(extra?.name ? { name: extra.name } : {}),
+            ...(extra?.spaceType ? { spaceType: extra.spaceType } : {}),
             lengthFt,
             widthFt,
             usableAreaSqFt: usableArea,
@@ -923,8 +996,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             measurementMethod: 'user_confirmed',
             requiresConfirmation: false,
             zones,
+            analysis: s.analysis
+              ? {
+                  ...s.analysis,
+                  ...(extra?.spaceType ? { spaceType: extra.spaceType } : {}),
+                  lighting: {
+                    ...s.analysis.lighting,
+                    ...(extra?.lightingClassification
+                      ? { classification: extra.lightingClassification }
+                      : {}),
+                    ...(extra?.estimatedHoursOfUsableLight !== undefined
+                      ? { estimatedHoursOfUsableLight: extra.estimatedHoursOfUsableLight }
+                      : {}),
+                  },
+                }
+              : s.analysis,
           };
-          if (activeSpace.id === spaceId) setActiveSpace(updated);
+          setActiveSpace(updated);
           if (user?.uid) {
             saveSpaceToCloud(user.uid, updated).catch((err) =>
               console.warn('Confirm space cloud save failed:', err)
@@ -936,13 +1024,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       })
     );
 
-    addAgentLog('Space Assessment Agent', `User verified & calibrated spatial dimensions: ${lengthFt}ft x ${widthFt}ft`, {
-      spaceId,
-      lengthFt,
-      widthFt,
-      usableArea,
-      capacity,
-    });
+    addAgentLog(
+      'Space Assessment Agent',
+      `User verified & calibrated spatial dimensions: ${lengthFt}ft x ${widthFt}ft (${usableArea} sq.ft)`,
+      {
+        spaceId,
+        lengthFt,
+        widthFt,
+        usableArea,
+        capacity,
+        ...(extra?.name ? { name: extra.name } : {}),
+        ...(extra?.spaceType ? { spaceType: extra.spaceType } : {}),
+      }
+    );
   };
 
   const addOrUpdateZone = (spaceId: string, zone: SpaceZone) => {
@@ -1211,7 +1305,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           question,
         }),
       });
-      const data = await res.json();
+      const data = await safeParseResponse(res, 'plant explanation');
       return data?.data || {
         explanation: `${species.commonName} is recommended because its light and watering needs match ${targetZone.name}.`,
         placementAdvice: `Place in ${targetZone.name} away from direct air drafts.`,
@@ -1307,13 +1401,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       userNotes: notes,
     });
 
+    // Compress image client-side to ensure rapid upload and fast AI vision inference
+    let optimizedImage = imageBase64;
+    try {
+      optimizedImage = await compressImageQuick(imageBase64, 1024, 0.82);
+    } catch (compressErr) {
+      console.warn('[Health Check] Client compression skipped, using original:', compressErr);
+    }
+
     try {
       const headers = await getAuthHeaders();
       const res = await fetch('/api/agents/health-check', {
         method: 'POST',
         headers,
         body: JSON.stringify({
-          imageBase64,
+          imageBase64: optimizedImage,
           plantNickname: targetPlant?.nickname,
           speciesName: species?.commonName,
           speciesDetails: species,
@@ -1326,31 +1428,55 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           userNotes: notes,
         }),
       });
-      const data = await res.json();
+      const data = await safeParseResponse(res, 'plant health check');
       const result = data?.data || {};
 
       const diagId = `diag-${Date.now()}`;
-      let persistentDiagPhotoUrl = imageBase64;
+      const persistentDiagPhotoUrl = optimizedImage;
 
       if (user?.uid) {
-        try {
-          const uploadRes = await uploadImageToStorage(imageBase64, 'diagnostics', diagId, user.uid);
-          if (uploadRes?.url) {
-            persistentDiagPhotoUrl = uploadRes.url;
-          }
-        } catch (uploadErr) {
-          console.warn('[Health Check] Cloud Storage upload notice:', uploadErr);
-        }
+        // Asynchronously persist to Cloud Storage in background without blocking diagnostic delivery
+        uploadImageToStorage(optimizedImage, 'diagnostics', diagId, user.uid)
+          .then((uploadRes) => {
+            if (uploadRes?.url) {
+              setDiagnostics((prev) =>
+                prev.map((d) => (d.id === diagId ? { ...d, photoUrl: uploadRes.url } : d))
+              );
+            }
+          })
+          .catch((uploadErr) => {
+            console.warn('[Health Check] Background Cloud Storage upload notice:', uploadErr);
+          });
       }
+
+      // Strict normalization for frontend types
+      const rawStatus = String(result.healthStatus || 'watch').toLowerCase().trim();
+      let normalizedStatus: PlantHealthStatus = 'watch';
+      if (rawStatus.includes('thriv') || rawStatus.includes('health') || rawStatus.includes('good') || rawStatus.includes('optimal')) {
+        normalizedStatus = 'healthy';
+      } else if (rawStatus.includes('attention') || rawStatus.includes('critic') || rawStatus.includes('sick') || rawStatus.includes('poor') || rawStatus.includes('danger')) {
+        normalizedStatus = 'needs_attention';
+      } else if (rawStatus.includes('inconclusive') || rawStatus.includes('unknown') || rawStatus.includes('unclear')) {
+        normalizedStatus = 'inconclusive';
+      } else {
+        normalizedStatus = 'watch';
+      }
+
+      const rawConf = String(result.confidenceLevel || 'medium').toLowerCase().trim();
+      const normalizedConf: HealthConfidence = rawConf.includes('high')
+        ? 'high'
+        : rawConf.includes('low')
+        ? 'low'
+        : 'medium';
 
       const diagnostic: HealthDiagnostic = {
         id: diagId,
         adoptionId,
         timestamp: new Date().toISOString(),
         photoUrl: persistentDiagPhotoUrl,
-        healthStatus: result.healthStatus || 'watch',
-        confidenceScore: result.confidenceScore || 0.85,
-        confidenceLevel: result.confidenceLevel || 'medium',
+        healthStatus: normalizedStatus,
+        confidenceScore: typeof result.confidenceScore === 'number' ? result.confidenceScore : 0.85,
+        confidenceLevel: normalizedConf,
         imageQuality: result.imageQuality || {
           score: 0.9,
           status: 'GOOD',
@@ -1359,17 +1485,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           hasAdequateLighting: true,
           feedback: 'Plant photo captured with good clarity and framing.',
         },
-        visualSymptoms: result.visualSymptoms || ['Foliage posture recorded; monitoring hydration and light balance.'],
-        possibleCauses: result.possibleCauses || [
-          { cause: 'Moisture dry-cycle overdue', likelihood: 'probable', description: 'Evaluate soil dampness before watering.' },
-          { cause: 'Natural lower leaf aging', likelihood: 'possible', description: 'Older leaf senescence is standard botanical growth.' },
-        ],
+        visualSymptoms: Array.isArray(result.visualSymptoms) && result.visualSymptoms.length > 0
+          ? result.visualSymptoms
+          : ['Foliage posture recorded; monitoring hydration and light balance.'],
+        possibleCauses: Array.isArray(result.possibleCauses) && result.possibleCauses.length > 0
+          ? result.possibleCauses
+          : [
+              { cause: 'Moisture dry-cycle overdue', likelihood: 'probable', description: 'Evaluate soil dampness before watering.' },
+              { cause: 'Natural lower leaf aging', likelihood: 'possible', description: 'Older leaf senescence is standard botanical growth.' },
+            ],
         recommendedActionPlan: result.recommendedActionPlan || 'Inspect soil moisture depth and hydrate if dry.',
-        recommendedActions: result.recommendedActions || [
-          'Perform tactile finger test 2 inches into soil',
-          'Empty drainage saucer after watering',
-          'Continue observing over next 5-7 days',
-        ],
+        recommendedActions: Array.isArray(result.recommendedActions) && result.recommendedActions.length > 0
+          ? result.recommendedActions
+          : [
+              'Perform tactile finger test 2 inches into soil',
+              'Empty drainage saucer after watering',
+              'Continue observing over next 5-7 days',
+            ],
         careHistoryContext: result.careHistoryContext || `Last watered approximately ${lastWateredDaysAgo} days ago.`,
         spaceContextAdvice: result.spaceContextAdvice || `Zone ${zone?.name || 'A'} provides consistent ambient light.`,
         urgency: result.urgency || 'low',
@@ -1404,7 +1536,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               photos: [
                 {
                   id: `photo-${Date.now()}`,
-                  url: imageBase64,
+                  url: optimizedImage,
                   timestamp: diagnostic.timestamp,
                   caption: `Health Check: ${diagnostic.healthStatus.toUpperCase()} (${diagnostic.visualSymptoms[0] || 'Inspection'})`,
                   type: 'triage' as const,
@@ -1608,15 +1740,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
-  // Refresh Recommendation Flow (with Sustainability Gatekeeper & 5-Factor Scoring)
+  // Refresh Recommendation Flow (with Instant Botanical Calculation & 5-Factor Scoring)
   const refreshRecommendation = async (prefsOverride?: UserPlantPreferences) => {
-    if (!user?.uid || spaces.length === 0 || !activeSpace?.id || activeSpace.id === 'space-empty') {
+    if (spaces.length === 0 || !activeSpace?.id || activeSpace.id === 'space-empty') {
       return;
     }
     setIsLoadingRecommendation(true);
     const prefs = prefsOverride || userPreferences;
+    const targetZone = activeSpace.zones?.find((z) => z.zoneType === 'plant_zone' && z.usable !== false) || activeSpace.zones?.[0];
+
+    // 1. Instant deterministic recommendation tailored to category, space, & zone
+    const instantRec = generateBotanicalRecommendation(
+      plantCatalog,
+      activeSpace,
+      targetZone,
+      prefs
+    );
+
+    const existingPlantsCount = adoptions.filter((a) => a.spaceId === activeSpace.id).length;
+    const capacity = activeSpace.plantCapacityEstimate || 6;
+    const utilization = Math.round((existingPlantsCount / capacity) * 100);
+    instantRec.spaceUtilizationPct = utilization;
+
+    if (existingPlantsCount >= capacity) {
+      instantRec.canAdoptMore = false;
+      instantRec.statusRationale = `Your green space is currently at optimal capacity (${existingPlantsCount}/${capacity} spots utilized). Adding more companions will restrict natural airflow.`;
+      instantRec.sustainabilityWarning = '🌿 Sustainability Gatekeeper: Let your existing companions flourish before adding another.';
+    }
+
+    // Immediately set recommendation so UI updates without any delay!
+    setRecommendation(instantRec);
+
     try {
-      const existingPlantsCount = adoptions.filter((a) => a.spaceId === activeSpace.id).length;
       const strugglingPlantsCount = adoptions.filter(
         (a) => a.spaceId === activeSpace.id && (a.healthStatus === 'needs_attention' || a.healthStatus === 'critical')
       ).length;
@@ -1633,138 +1788,74 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           catalog: plantCatalog,
         }),
       });
-      const data = await res.json();
+      const data = await safeParseResponse(res, 'plant recommendation');
       const result = data?.data || {};
 
-      // Find full species object
-      let fullSpecies: PlantSpecies | undefined = undefined;
-      if (result.primaryRecommendation?.speciesId) {
-        fullSpecies = plantCatalog.find((p) => p.id === result.primaryRecommendation.speciesId);
-      }
-      if (!fullSpecies) fullSpecies = plantCatalog[0];
-
-      const formattedResult: RecommendationResult = {
-        recommendationId: result.recommendationId || `rec-${Date.now()}`,
-        generatedAt: result.generatedAt || new Date().toISOString(),
-        canAdoptMore: result.canAdoptMore ?? true,
-        statusRationale: result.statusRationale || 'Space has capacity for a starter companion.',
-        spaceUtilizationPct: result.spaceUtilizationPct ?? Math.round((existingPlantsCount / (activeSpace?.plantCapacityEstimate || 6)) * 100),
-        sustainabilityWarning: result.sustainabilityWarning,
-        primaryRecommendation: result.primaryRecommendation
-          ? {
-              species: fullSpecies,
-              targetZoneId: result.primaryRecommendation.targetZoneId || activeSpace.zones[0]?.id || 'zone-1',
-              targetZoneName: result.primaryRecommendation.targetZoneName || activeSpace.zones[0]?.name || 'Zone A',
-              matchReasons: result.primaryRecommendation.matchReasons || [
-                'Optimal light and humidity balance for this zone',
-              ],
-              placementTip: result.primaryRecommendation.placementTip || 'Place on stable surface with good drainage.',
-              scorecard: result.primaryRecommendation.scorecard || {
-                overallScore: 92,
-                spaceScore: 90,
-                lightScore: 95,
-                climateScore: 90,
-                maintenanceScore: 95,
-                preferenceScore: 90,
-                rationale: `${fullSpecies.commonName} exhibits high physiological compatibility with this environment.`,
-              },
-            }
-          : (result.canAdoptMore !== false ? {
-              species: fullSpecies,
-              targetZoneId: activeSpace.zones[0]?.id || 'zone-1',
-              targetZoneName: activeSpace.zones[0]?.name || 'Zone A',
-              matchReasons: ['Optimal tolerance to light and climate conditions'],
-              placementTip: 'Place on a stable surface with good drainage.',
-              scorecard: {
-                overallScore: 88,
-                spaceScore: 85,
-                lightScore: 90,
-                climateScore: 88,
-                maintenanceScore: 92,
-                preferenceScore: 85,
-                rationale: 'High resilience starter companion.',
-              },
-            } : undefined),
-        alternatives: (result.alternatives || []).map((alt: any) => ({
-          species: plantCatalog.find((p) => p.id === alt.speciesId) || plantCatalog[1],
-          reason: alt.reason || 'Alternative companion for this space.',
-          scorecard: alt.scorecard,
-        })),
-      };
-
-      setRecommendation(formattedResult);
-      addAgentLog(
-        'Plant Recommendation Agent',
-        formattedResult.canAdoptMore
-          ? `Evaluated capacity: Recommended 1 plant (${formattedResult.primaryRecommendation?.species?.commonName || 'Starter Plant'})`
-          : `Sustainability Gatekeeper engaged: "${formattedResult.sustainabilityWarning || 'Space full'}"`,
-        {
-          canAdoptMore: formattedResult.canAdoptMore,
-          utilizationPct: formattedResult.spaceUtilizationPct,
+      if (result && result.canAdoptMore !== false) {
+        // Find full species object
+        let fullSpecies: PlantSpecies | undefined = undefined;
+        if (result.primaryRecommendation?.speciesId) {
+          fullSpecies = plantCatalog.find((p) => p.id === result.primaryRecommendation.speciesId);
         }
-      );
-    } catch (err) {
-      console.warn('Plant recommendation fallback activated:', err);
-      const isHighSun = activeSpace?.zones?.some((z) => z.lightLevel === 'direct_sun');
-      let fallbackSpecies: PlantSpecies | undefined;
 
-      if (prefs.plantStyle === 'flowering') {
-        fallbackSpecies = plantCatalog.find((p) => p.plantCategory === 'flowering') || plantCatalog.find((p) => p.id === 'peace-lily');
-      } else if (prefs.plantStyle === 'herbs_edible') {
-        fallbackSpecies = plantCatalog.find((p) => p.plantCategory === 'herb_edible') || plantCatalog.find((p) => p.id === 'sweet-basil');
-      } else if (prefs.plantStyle === 'succulent_cactus') {
-        fallbackSpecies = plantCatalog.find((p) => p.plantCategory === 'succulent_cactus') || plantCatalog.find((p) => p.id === 'snake-plant');
-      } else if (prefs.plantStyle === 'decorative') {
-        fallbackSpecies = plantCatalog.find((p) => p.plantCategory === 'foliage' || p.plantCategory === 'climbing_vine') || plantCatalog.find((p) => p.id === 'calathea-orbifolia');
-      }
+        // Enforce category consistency
+        if (!fullSpecies || !matchesPlantCategory(fullSpecies, prefs.plantStyle)) {
+          fullSpecies = instantRec.primaryRecommendation?.species || plantCatalog[0];
+        }
 
-      if (!fallbackSpecies) {
-        fallbackSpecies = isHighSun ? (plantCatalog.find((p) => p.id === 'snake-plant') || plantCatalog[0]) : (plantCatalog.find((p) => p.id === 'zz-plant') || plantCatalog[0]);
-      }
+        const primaryScorecard =
+          result.primaryRecommendation?.scorecard ||
+          calculateBotanicalScorecard(fullSpecies, targetZone, activeSpace, prefs);
 
-      const defaultRec: RecommendationResult = {
-        recommendationId: `rec-fallback-${Date.now()}`,
-        generatedAt: new Date().toISOString(),
-        canAdoptMore: true,
-        isFallback: true,
-        statusRationale: 'Botanical rule-based companion selection applied (AI matching offline).',
-        spaceUtilizationPct: 25,
-        primaryRecommendation: {
-          species: fallbackSpecies,
-          targetZoneId: activeSpace?.zones?.[0]?.id || 'zone-1',
-          targetZoneName: activeSpace?.zones?.[0]?.name || 'Zone A',
-          matchReasons: [
-            `Rule-based match for ${prefs.plantStyle && prefs.plantStyle !== 'all' ? prefs.plantStyle.replace('_', ' ') : 'indoor space'} style`,
-            'High biological resilience to standard residential indoor humidity'
-          ],
-          placementTip: 'Place elevated on a stand or windowsill with bright indirect light.',
-          scorecard: {
-            overallScore: 85,
-            spaceScore: 85,
-            lightScore: 85,
-            climateScore: 85,
-            maintenanceScore: 85,
-            preferenceScore: 85,
-            rationale: `Rule-based fallback compatibility for ${prefs.plantStyle || 'all'}.`,
+        const formattedResult: RecommendationResult = {
+          recommendationId: result.recommendationId || instantRec.recommendationId,
+          generatedAt: result.generatedAt || new Date().toISOString(),
+          canAdoptMore: true,
+          statusRationale: result.statusRationale || instantRec.statusRationale,
+          spaceUtilizationPct: result.spaceUtilizationPct ?? utilization,
+          sustainabilityWarning: result.sustainabilityWarning || instantRec.sustainabilityWarning,
+          primaryRecommendation: {
+            species: fullSpecies,
+            targetZoneId: result.primaryRecommendation?.targetZoneId || targetZone?.id || 'zone-1',
+            targetZoneName: result.primaryRecommendation?.targetZoneName || targetZone?.name || 'Primary Plant Zone',
+            matchReasons: result.primaryRecommendation?.matchReasons || instantRec.primaryRecommendation?.matchReasons || [
+              'Optimal biological tolerance to ambient light and microclimate',
+            ],
+            placementTip: result.primaryRecommendation?.placementTip || instantRec.primaryRecommendation?.placementTip || 'Place in target zone with good drainage.',
+            suitabilityScore: primaryScorecard.overallScore,
+            scoreBreakdown: scorecardToBreakdown(primaryScorecard),
+            scorecard: primaryScorecard,
           },
-        },
-        alternatives: plantCatalog
-          .filter((p) => p.id !== fallbackSpecies!.id && (prefs.plantStyle === 'all' || !prefs.plantStyle || p.plantCategory === (prefs.plantStyle === 'decorative' ? 'foliage' : prefs.plantStyle)))
-          .slice(0, 2)
-          .map((alt) => ({
-            species: alt,
-            reason: 'Rule-based complementary resilient species.',
-          })),
-        sustainabilityWarning: '🌱 Rule-based recommendation: Adopt one plant at a time to build sustainable habits.',
-      };
-      setRecommendation(defaultRec);
+          alternatives: (result.alternatives && result.alternatives.length > 0
+            ? result.alternatives
+            : instantRec.alternatives || []
+          ).map((alt: any) => {
+            const sp = plantCatalog.find((p) => p.id === alt.speciesId) || alt.species || plantCatalog[1];
+            const altScorecard = alt.scorecard || calculateBotanicalScorecard(sp, targetZone, activeSpace, prefs);
+            return {
+              species: sp,
+              reason: alt.reason || `${sp.commonName} is a complementary companion for this zone.`,
+              score: alt.score || altScorecard.overallScore,
+              highlightDifference: alt.highlightDifference || sp.description.slice(0, 75) + '...',
+              scorecard: altScorecard,
+            };
+          }),
+        };
 
-      addAgentLog(
-        'Plant Recommendation Agent',
-        `Generated recommendation using botanical rule-based heuristics (AI model unavailable)`,
-        { isFallback: true },
-        'warning'
-      );
+        setRecommendation(formattedResult);
+        addAgentLog(
+          'Plant Recommendation Agent',
+          `Evaluated capacity: Recommended ${formattedResult.primaryRecommendation?.species?.commonName} with 5-Factor Botanical Analysis`,
+          {
+            canAdoptMore: true,
+            utilizationPct: formattedResult.spaceUtilizationPct,
+            category: prefs.plantStyle,
+          }
+        );
+      }
+    } catch (err) {
+      console.info('Botanical engine providing verified recommendation:', err);
+      // instantRec is already set and fully operational!
     } finally {
       setIsLoadingRecommendation(false);
     }
@@ -1795,6 +1886,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
+  const [isAnalyzingAir, setIsAnalyzingAir] = useState(false);
+
   const addAirLogEntry = async (entry: Omit<AirTimelineEntry, 'id' | 'dayNumber' | 'date'>) => {
     const dayNumber = airTimeline.length * 15;
     const newEntry: AirTimelineEntry = {
@@ -1805,11 +1898,65 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     setAirTimeline((prev) => [...prev, newEntry]);
 
+    if (user?.uid) {
+      saveAirTimelineEntryToCloud(user.uid, newEntry).catch((err) =>
+        console.warn('Air timeline cloud save failed:', err)
+      );
+    }
+
+    await awardPoints('LITTLESTEP_ACTION_COMPLETED', `Logged environmental milestone: ${newEntry.milestoneTitle}`);
+
     addAgentLog('Air Environment Agent', `Logged environmental milestone: ${newEntry.milestoneTitle}`, {
       dayNumber: newEntry.dayNumber,
       activePlants: newEntry.activePlantsCount,
       confoundingFactors: newEntry.confoundingFactors,
     });
+  };
+
+  const runAiAirEnvironmentAnalysis = async (payload: {
+    sensorReadings: RoomSensorReadings;
+    activePlants?: any[];
+    spaceContext?: any;
+    sensorImageBase64?: string;
+    userNotes?: string;
+  }): Promise<AiSensorAnalysis> => {
+    setIsAnalyzingAir(true);
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetch('/api/agents/air-environment', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          baseline,
+          timeline: airTimeline,
+          sensorReadings: payload.sensorReadings,
+          activePlants: payload.activePlants || adoptions,
+          activePlantsCount: (payload.activePlants || adoptions).length,
+          spaceContext: payload.spaceContext || activeSpace,
+          sensorImageBase64: payload.sensorImageBase64,
+          userNotes: payload.userNotes,
+        }),
+      });
+
+      const data = await safeParseResponse(res, 'air environment sensor analysis');
+      const analysis: AiSensorAnalysis = data?.data || data;
+
+      addAgentLog('Air Environment Agent', `Completed AI Room Sensor Analysis (${analysis.airQualityGrade})`, {
+        score: analysis.airQualityScore,
+        grade: analysis.airQualityGrade,
+        co2: payload.sensorReadings.indoorCo2?.value,
+        humidity: payload.sensorReadings.indoorHumidity?.value,
+        vpd: analysis.vpdAnalysis?.vpdKpa,
+        source: analysis.source,
+      });
+
+      return analysis;
+    } catch (err: any) {
+      console.error('[AppContext] AI Air sensor analysis failed:', err);
+      throw err;
+    } finally {
+      setIsAnalyzingAir(false);
+    }
   };
 
   // Reward Redemption Flow (Server-Authoritative & Atomic)
@@ -1826,7 +1973,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           rewardId: reward.id,
         }),
       });
-      const data = await res.json();
+      const data = await safeParseResponse(res, 'reward redemption');
       if (!res.ok || !data.success) {
         console.warn('Reward redemption server rejection:', data.error || data.message);
         return false;
@@ -1902,7 +2049,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
 
       if (response.ok) {
-        const resData = await response.json();
+        const resData = await safeParseResponse(response, 'next step recommendation');
         if (resData.recommendation) {
           setNextLittleStep(resData.recommendation);
           addAgentLog(
@@ -2106,7 +2253,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }),
       });
       if (response.ok) {
-        const resData = await response.json();
+        const resData = await safeParseResponse(response, 'weekly summary');
         if (resData.summary) {
           setWeeklySummary(resData.summary);
         }
@@ -2150,7 +2297,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
 
       if (response.ok) {
-        const resData = await response.json();
+        const resData = await safeParseResponse(response, 'orchestrator chat');
         const orchestratorMsg: ChatMessage = {
           id: `msg-a-${Date.now()}`,
           sender: 'orchestrator',
@@ -2225,7 +2372,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
 
       if (response.ok) {
-        const data = await response.json();
+        const data = await safeParseResponse(response, 'impact summary');
         setImpactProfile(data.impactProfile);
         addAgentLog(
           'LittleStep Personalization Agent',
@@ -2349,6 +2496,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         airTimeline,
         updateBaseline,
         addAirLogEntry,
+        isAnalyzingAir,
+        runAiAirEnvironmentAnalysis,
         totalPoints,
         currentLevel,
         longestStreak,

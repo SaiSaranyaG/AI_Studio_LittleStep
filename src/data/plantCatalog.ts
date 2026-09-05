@@ -24,7 +24,7 @@ export const PLANT_CATALOG: PlantSpecies[] = [
     recommendedContainerSize: '6 - 8 inches with drainage',
     spaceRequirement: 'compact',
     sizeCategory: 'medium',
-    imageUrl: 'https://images.unsplash.com/photo-1593482892290-f54927ae1bf6?auto=format&fit=crop&w=600&q=80',
+    imageUrl: 'https://images.unsplash.com/photo-1509223197845-458d87318791?auto=format&fit=crop&w=600&q=80',
     description: 'Extremely resilient upright architectural foliage that tolerates drought, irregular watering, and diverse indoor lighting.',
     petSafe: false,
     petSafetyNotes: 'Contains saponins; mildly toxic to cats and dogs if chewed in quantity.',
@@ -274,7 +274,7 @@ export const PLANT_CATALOG: PlantSpecies[] = [
     recommendedContainerSize: '8 - 10 inches with saucer',
     spaceRequirement: 'medium',
     sizeCategory: 'medium',
-    imageUrl: 'https://images.unsplash.com/photo-1593691509543-c55fb32e7355?auto=format&fit=crop&w=600&q=80',
+    imageUrl: 'https://images.unsplash.com/photo-1584589167171-541ce45f1eea?auto=format&fit=crop&w=600&q=80',
     description: 'Lush dark foliage producing graceful white floral spathes; visibly droops when thirsty and quickly rebounds after watering.',
     petSafe: false,
     petSafetyNotes: 'Contains calcium oxalate crystals; keep out of reach of pets.',
@@ -574,7 +574,7 @@ export const PLANT_CATALOG: PlantSpecies[] = [
     recommendedContainerSize: '6 - 8 inches with drainage',
     spaceRequirement: 'compact',
     sizeCategory: 'small',
-    imageUrl: 'https://images.unsplash.com/photo-1618164435735-413d3b066c9a?auto=format&fit=crop&w=600&q=80',
+    imageUrl: 'https://upload.wikimedia.org/wikipedia/commons/9/90/Basil-Basilico-Ocimum_basilicum-albahaca.jpg',
     description: 'Aromatic culinary herb with tender savory leaves for fresh pestos, teas, and cooking. Rapid growth on sunny sills & balconies.',
     petSafe: true,
     petSafetyNotes: '100% Non-toxic and culinary safe for pets and humans.',
@@ -624,7 +624,7 @@ export const PLANT_CATALOG: PlantSpecies[] = [
     recommendedContainerSize: '6 - 8 inches dedicated container',
     spaceRequirement: 'compact',
     sizeCategory: 'small',
-    imageUrl: 'https://images.unsplash.com/photo-1608686207856-001b95cf60ca?auto=format&fit=crop&w=600&q=80',
+    imageUrl: 'https://upload.wikimedia.org/wikipedia/commons/0/05/Minze.jpg',
     description: 'Vigorous, refreshing culinary herb for homemade teas, infused water, and cooking. Exceptionally hardy and forgiving.',
     petSafe: true,
     petSafetyNotes: 'Safe in standard culinary herb quantities.',
@@ -674,7 +674,7 @@ export const PLANT_CATALOG: PlantSpecies[] = [
     recommendedContainerSize: '8 - 10 inches pot with drainage tray',
     spaceRequirement: 'compact',
     sizeCategory: 'small',
-    imageUrl: 'https://images.unsplash.com/photo-1592841200221-a6898f307baa?auto=format&fit=crop&w=600&q=80',
+    imageUrl: 'https://upload.wikimedia.org/wikipedia/commons/1/10/Tomates_cerises_Luc_Viatour.jpg',
     description: 'Compact miniature fruiting tomato plant specially bred for sunny balconies, patios, and bright window ledges.',
     petSafe: false,
     petSafetyNotes: 'Foliage contains solanine; tomatoes are edible, but keep leaves away from pets.',
@@ -724,7 +724,7 @@ export const PLANT_CATALOG: PlantSpecies[] = [
     recommendedContainerSize: '8 - 10 inches with drainage',
     spaceRequirement: 'medium',
     sizeCategory: 'medium',
-    imageUrl: 'https://images.unsplash.com/photo-1509423350716-97f9360b4e09?auto=format&fit=crop&w=600&q=80',
+    imageUrl: 'https://upload.wikimedia.org/wikipedia/commons/f/fa/Calathea_orbifolia_2.jpg',
     description: 'Designer architectural foliage with large round leaves painted with metallic silver-green stripes. 100% Non-toxic to pets.',
     petSafe: true,
     petSafetyNotes: '100% Non-toxic to cats and dogs (ASPCA certified animal safe).',
@@ -802,5 +802,8 @@ export const PLANT_CATALOG: PlantSpecies[] = [
     sourceLastUpdated: '2026-02-18',
   },
 ];
+
+export const plantCatalog = PLANT_CATALOG;
+
 
 

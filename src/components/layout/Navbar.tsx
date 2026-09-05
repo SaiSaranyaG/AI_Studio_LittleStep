@@ -108,11 +108,13 @@ export const Navbar: React.FC = () => {
                 <button
                   id="back-to-dashboard-btn"
                   onClick={() => setActiveTab('dashboard')}
-                  className="p-2 rounded-xl bg-emerald-900/80 hover:bg-emerald-800 border border-emerald-700/60 text-emerald-200 hover:text-white transition-all flex items-center gap-1.5 text-xs font-semibold shadow-sm cursor-pointer"
-                  title="Return to Options Hub"
+                  className="p-2 sm:px-3 rounded-xl bg-emerald-900/80 hover:bg-emerald-800 border border-emerald-700/60 text-emerald-200 hover:text-white transition-all flex items-center gap-1.5 text-xs font-semibold shadow-sm cursor-pointer"
+                  title={activeTab === 'explore' ? 'Back to Home Page' : 'Return to Options Hub'}
                 >
                   <ArrowLeft className="w-4 h-4" />
-                  <span className="hidden sm:inline">Options</span>
+                  <span className="hidden sm:inline">
+                    {activeTab === 'explore' ? 'Back to Home' : 'Options'}
+                  </span>
                 </button>
               )}
 
