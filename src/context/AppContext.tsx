@@ -1253,13 +1253,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               ]
             : a.photos;
 
+          const updatedMilestones = (a.milestones || []).map((m) =>
+            m.day === 1
+              ? {
+                  ...m,
+                  isUnlocked: true,
+                  isCompleted: true,
+                  completedAt: m.completedAt || timestamp,
+                }
+              : m
+          );
+
+          const formattedNotes = setupNotes?.trim()
+            ? (a.notes && a.notes.includes(setupNotes.trim())
+                ? a.notes
+                : a.notes
+                ? `${a.notes} ${setupNotes.trim()}`
+                : setupNotes.trim())
+            : a.notes;
+
           const updated: PlantAdoption = {
             ...a,
             status: 'SETUP_COMPLETED',
             setupConfirmedAt: timestamp,
-            setupPhotoUrl: persistentPhotoUrl || a.photos[0]?.url,
-            notes: setupNotes ? `${a.notes ? a.notes + ' ' : ''}${setupNotes}` : a.notes,
+            setupPhotoUrl: persistentPhotoUrl || a.setupPhotoUrl || a.photos[0]?.url,
+            notes: formattedNotes,
             photos: updatedPhotos,
+            milestones: updatedMilestones,
           };
           if (activePlant?.id === adoptionId) setActivePlant(updated);
           if (user?.uid) {

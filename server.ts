@@ -1148,7 +1148,7 @@ app.post('/api/points/verify', requireAuth, async (req: AuthRequest, res) => {
     }
 
     // Determine unique action identifier for deduplication
-    const uniqueActionId = (actionId || eventId || '').toString().trim();
+    const uniqueActionId = (actionId || eventId || req.body.uniqueActionId || '').toString().trim();
     if (!uniqueActionId) {
       return res.status(400).json({
         error: 'INVALID_ACTION_ID',

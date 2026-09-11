@@ -104,6 +104,24 @@ export async function optimizeImageForSpaceAnalysis(
   let originalSizeBytes = 0;
 
   if (typeof input === 'string') {
+    // If it's an HTTP/HTTPS URL, preserve it directly without canvas processing to prevent tainted canvas errors
+    if (input.startsWith('http://') || input.startsWith('https://')) {
+      return {
+        dataUrl: input,
+        base64: input,
+        originalSizeBytes: 0,
+        compressedSizeBytes: 0,
+        savedBytes: 0,
+        reductionPercentage: 0,
+        originalWidth: 0,
+        originalHeight: 0,
+        width: 0,
+        height: 0,
+        mimeType: format,
+        durationMs: 0,
+        summary: 'Remote URL preserved',
+      };
+    }
     rawDataUrl = input;
     originalSizeBytes = estimateBase64Bytes(input);
   } else if (input && typeof (input as Blob).size === 'number') {
@@ -186,15 +204,22 @@ export async function optimizeImageForSpaceAnalysis(
 
     // 5. Export compressed data URL
     let currentQuality = quality;
-    let compressedDataUrl = canvas.toDataURL(format, currentQuality);
-    let compressedSizeBytes = estimateBase64Bytes(compressedDataUrl);
-
-    // Optional second-pass if targetMaxBytes is specified and we exceeded it
-    if (targetMaxBytes && compressedSizeBytes > targetMaxBytes && currentQuality > 0.45) {
-      currentQuality = Math.max(0.45, currentQuality - 0.2);
+    let compressedDataUrl = '';
+    try {
       compressedDataUrl = canvas.toDataURL(format, currentQuality);
-      compressedSizeBytes = estimateBase64Bytes(compressedDataUrl);
+      let compressedSizeBytes = estimateBase64Bytes(compressedDataUrl);
+
+      // Optional second-pass if targetMaxBytes is specified and we exceeded it
+      if (targetMaxBytes && compressedSizeBytes > targetMaxBytes && currentQuality > 0.45) {
+        currentQuality = Math.max(0.45, currentQuality - 0.2);
+        compressedDataUrl = canvas.toDataURL(format, currentQuality);
+      }
+    } catch (toDataUrlErr) {
+      console.warn('[ImageOptimizer] Canvas toDataURL export restricted (tainted canvas):', toDataUrlErr);
+      compressedDataUrl = rawDataUrl;
     }
+
+    let compressedSizeBytes = estimateBase64Bytes(compressedDataUrl);
 
     const cleanBase64 = compressedDataUrl.replace(/^data:[a-zA-Z0-9/+-]+;base64,/, '').trim();
     const savedBytes = Math.max(0, originalSizeBytes - compressedSizeBytes);

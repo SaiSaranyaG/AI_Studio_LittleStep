@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Camera,
   Upload,
@@ -11,7 +11,9 @@ import {
   X,
   Compass,
 } from 'lucide-react';
+import confetti from 'canvas-confetti';
 import { PlantAdoption, SpaceProfile } from '../../types';
+import { compressImageForUpload } from '../../services/storageService';
 
 interface PlantSetupJourneyModalProps {
   adoption: PlantAdoption;
@@ -28,29 +30,80 @@ export const PlantSetupJourneyModal: React.FC<PlantSetupJourneyModalProps> = ({
   onClose,
   onConfirmSetup,
 }) => {
-  const [setupPhoto, setSetupPhoto] = useState<string | null>(null);
-  const [setupNotes, setSetupNotes] = useState('');
+  const [setupPhoto, setSetupPhoto] = useState<string | null>(
+    adoption?.setupPhotoUrl || adoption?.photos?.find((p) => p.type === 'setup')?.url || null
+  );
+  const [setupNotes, setSetupNotes] = useState(adoption?.notes || '');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [activeStep, setActiveStep] = useState<1 | 2>(1);
+  const [isDragging, setIsDragging] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (isOpen) {
+      setSetupPhoto(
+        adoption?.setupPhotoUrl || adoption?.photos?.find((p) => p.type === 'setup')?.url || null
+      );
+      setSetupNotes(adoption?.notes || '');
+      setIsSubmitting(false);
+    }
+  }, [isOpen, adoption]);
 
   if (!isOpen) return null;
 
-  const targetZone = space.zones.find((z) => z.id === adoption.zoneId) || space.zones[0];
+  const targetZone = space?.zones?.find((z) => z.id === adoption.zoneId) || space?.zones?.[0];
+
+  const processFile = async (file: File) => {
+    try {
+      const compressed = await compressImageForUpload(file);
+      setSetupPhoto(compressed);
+    } catch {
+      const reader = new FileReader();
+      reader.onload = () => {
+        setSetupPhoto(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
 
   const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      setSetupPhoto(reader.result as string);
-    };
-    reader.readAsDataURL(file);
+    processFile(file);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) {
+      processFile(file);
+    }
   };
 
   const handleCompleteSetup = async () => {
+    if (isSubmitting) return;
     setIsSubmitting(true);
     try {
       await onConfirmSetup(adoption.id, setupPhoto || undefined, setupNotes);
+      confetti({
+        particleCount: 50,
+        spread: 60,
+        origin: { y: 0.7 },
+      });
+      onClose();
+    } catch (err) {
+      console.error('[PlantSetupJourney] Error completing setup:', err);
       onClose();
     } finally {
       setIsSubmitting(false);
@@ -177,9 +230,19 @@ export const PlantSetupJourneyModal: React.FC<PlantSetupJourneyModalProps> = ({
           <div className="space-y-4 animate-fadeIn">
             <div>
               <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">
-                Capture / Upload Baseline Setup Photograph (Optional)
+                Capture / Upload Baseline Setup Photograph
               </label>
-              <div className="border-2 border-dashed border-slate-700 hover:border-emerald-500/60 rounded-xl p-4 text-center transition-colors bg-slate-950/40">
+              <div
+                onClick={() => !setupPhoto && fileInputRef.current?.click()}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+                className={`border-2 border-dashed rounded-xl p-4 text-center transition-all ${
+                  isDragging
+                    ? 'border-emerald-400 bg-emerald-950/30'
+                    : 'border-slate-700 hover:border-emerald-500/60 bg-slate-950/40'
+                } ${!setupPhoto ? 'cursor-pointer' : ''}`}
+              >
                 {setupPhoto ? (
                   <div className="space-y-3">
                     <img
@@ -187,12 +250,29 @@ export const PlantSetupJourneyModal: React.FC<PlantSetupJourneyModalProps> = ({
                       alt="Plant Setup"
                       className="max-h-48 mx-auto rounded-lg object-cover border border-slate-700"
                     />
-                    <button
-                      onClick={() => setSetupPhoto(null)}
-                      className="text-xs text-rose-400 hover:text-rose-300 font-semibold"
-                    >
-                      Remove and Retake
-                    </button>
+                    <div className="flex items-center justify-center gap-3">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          fileInputRef.current?.click();
+                        }}
+                        className="text-xs text-emerald-400 hover:text-emerald-300 font-semibold"
+                      >
+                        Change Photo
+                      </button>
+                      <span className="text-slate-600">•</span>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSetupPhoto(null);
+                        }}
+                        className="text-xs text-rose-400 hover:text-rose-300 font-semibold"
+                      >
+                        Remove and Retake
+                      </button>
+                    </div>
                   </div>
                 ) : (
                   <div className="space-y-2 py-4">
@@ -201,24 +281,25 @@ export const PlantSetupJourneyModal: React.FC<PlantSetupJourneyModalProps> = ({
                       <Upload className="w-8 h-8 text-teal-400" />
                     </div>
                     <p className="text-xs text-slate-300 font-medium">
-                      Take a photo of {adoption.nickname} placed in its new spot
+                      Take or upload a photo of {adoption.nickname} placed in its new spot
                     </p>
                     <p className="text-[11px] text-slate-400">
                       Establishes visual baseline for future AI health diagnostics
                     </p>
-                    <label className="inline-block mt-2 cursor-pointer">
-                      <span className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-white transition-colors">
-                        Browse Photo
+                    <div className="pt-1">
+                      <span className="inline-block px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-white transition-colors">
+                        Browse / Take Photo
                       </span>
-                      <input
-                        type="file"
-                        accept="image/*"
-                        onChange={handlePhotoUpload}
-                        className="hidden"
-                      />
-                    </label>
+                    </div>
                   </div>
                 )}
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  onChange={handlePhotoUpload}
+                  className="hidden"
+                />
               </div>
             </div>
 
@@ -260,19 +341,30 @@ export const PlantSetupJourneyModal: React.FC<PlantSetupJourneyModalProps> = ({
             {/* Footer Buttons */}
             <div className="flex items-center justify-between pt-2 border-t border-slate-800">
               <button
+                type="button"
                 onClick={() => setActiveStep(1)}
-                className="text-xs text-slate-400 hover:text-white font-medium"
+                className="text-xs text-slate-400 hover:text-white font-medium cursor-pointer"
               >
                 Back to Guidelines
               </button>
               <button
                 id="confirm-setup-complete-btn"
+                type="button"
                 onClick={handleCompleteSetup}
                 disabled={isSubmitting}
-                className="flex items-center gap-2 px-6 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-400 hover:from-emerald-400 hover:to-teal-300 text-slate-950 font-bold text-sm shadow-md transition-all disabled:opacity-50"
+                className="flex items-center gap-2 px-6 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-400 hover:from-emerald-400 hover:to-teal-300 text-slate-950 font-bold text-sm shadow-md transition-all disabled:opacity-50 cursor-pointer"
               >
-                <Award className="w-4 h-4" />
-                <span>{isSubmitting ? 'Saving...' : 'Confirm Setup (+20 Pts)'}</span>
+                {isSubmitting ? (
+                  <>
+                    <span className="w-4 h-4 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
+                    <span>Saving Setup...</span>
+                  </>
+                ) : (
+                  <>
+                    <Award className="w-4 h-4" />
+                    <span>Confirm Setup (+20 Pts)</span>
+                  </>
+                )}
               </button>
             </div>
           </div>

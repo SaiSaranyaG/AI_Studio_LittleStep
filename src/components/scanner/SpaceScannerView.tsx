@@ -180,25 +180,37 @@ export const SpaceScannerView: React.FC = () => {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const rawBase64 = canvas.toDataURL('image/jpeg', 0.9);
-    
-    // Lightweight downscaling and compression before storing & sending
-    const opt = await optimizeImageForSpaceAnalysis(rawBase64, {
-      maxDimension: 1024,
-      quality: 0.82,
-    });
+    try {
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      let rawBase64 = '';
+      try {
+        rawBase64 = canvas.toDataURL('image/jpeg', 0.9);
+      } catch (secErr) {
+        console.warn('[SpaceScanner] Canvas frame export restricted:', secErr);
+        setCameraError('Unable to capture camera frame due to browser canvas security restrictions. Please use photo upload.');
+        return;
+      }
+      
+      // Lightweight downscaling and compression before storing & sending
+      const opt = await optimizeImageForSpaceAnalysis(rawBase64, {
+        maxDimension: 1024,
+        quality: 0.82,
+      });
 
-    stopCameraStream();
-    setSelectedImage(opt.dataUrl);
-    setOptimizationStats(opt);
-    setImageMeta({
-      name: `camera_capture_${new Date().toISOString().slice(11, 19).replace(/:/g, '-')}.jpg`,
-      sizeKb: Math.round(opt.compressedSizeBytes / 1024),
-      source: 'camera',
-    });
-    setAnalyzerState('IMAGE_SELECTED');
-    setErrorMessage(null);
+      stopCameraStream();
+      setSelectedImage(opt.dataUrl);
+      setOptimizationStats(opt);
+      setImageMeta({
+        name: `camera_capture_${new Date().toISOString().slice(11, 19).replace(/:/g, '-')}.jpg`,
+        sizeKb: Math.round(opt.compressedSizeBytes / 1024),
+        source: 'camera',
+      });
+      setAnalyzerState('IMAGE_SELECTED');
+      setErrorMessage(null);
+    } catch (err: any) {
+      console.error('[SpaceScanner] Capture frame error:', err);
+      setCameraError('Failed to capture frame from camera.');
+    }
   };
 
   // Switch between back/front camera

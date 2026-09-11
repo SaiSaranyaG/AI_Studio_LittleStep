@@ -32,33 +32,59 @@ export async function compressImageForUpload(
       resolve(typeof fileOrBase64 === 'string' ? fileOrBase64 : '');
       return;
     }
+
+    // If it's already an HTTP / HTTPS URL, do not draw onto canvas to prevent tainted canvas SecurityError
+    if (
+      typeof fileOrBase64 === 'string' &&
+      (fileOrBase64.startsWith('http://') || fileOrBase64.startsWith('https://'))
+    ) {
+      resolve(fileOrBase64);
+      return;
+    }
+
     const img = new Image();
+    img.crossOrigin = 'anonymous';
+
     img.onload = () => {
-      let width = img.width;
-      let height = img.height;
+      try {
+        let width = img.width || 800;
+        let height = img.height || 600;
 
-      if (width > maxWidth || height > maxHeight) {
-        if (width / height > maxWidth / maxHeight) {
-          height = Math.round((height * maxWidth) / width);
-          width = maxWidth;
-        } else {
-          width = Math.round((width * maxHeight) / height);
-          height = maxHeight;
+        if (width > maxWidth || height > maxHeight) {
+          if (width / height > maxWidth / maxHeight) {
+            height = Math.round((height * maxWidth) / width);
+            width = maxWidth;
+          } else {
+            width = Math.round((width * maxHeight) / height);
+            height = maxHeight;
+          }
         }
-      }
 
-      const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) {
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, width);
+        canvas.height = Math.max(1, height);
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(typeof fileOrBase64 === 'string' ? fileOrBase64 : '');
+          return;
+        }
+
+        ctx.drawImage(img, 0, 0, width, height);
+
+        try {
+          const compressedDataUrl = canvas.toDataURL('image/jpeg', quality);
+          resolve(compressedDataUrl);
+        } catch (canvasErr) {
+          console.warn('[StorageService] Canvas export tainted or restricted, using fallback:', canvasErr);
+          // Gracefully resolve with the input string or empty without throwing uncaught SecurityError
+          resolve(typeof fileOrBase64 === 'string' ? fileOrBase64 : '');
+        }
+      } catch (err) {
+        console.warn('[StorageService] Compression error:', err);
         resolve(typeof fileOrBase64 === 'string' ? fileOrBase64 : '');
-        return;
       }
-      ctx.drawImage(img, 0, 0, width, height);
-      const compressedDataUrl = canvas.toDataURL('image/jpeg', quality);
-      resolve(compressedDataUrl);
     };
+
     img.onerror = () => {
       resolve(typeof fileOrBase64 === 'string' ? fileOrBase64 : '');
     };
@@ -68,7 +94,10 @@ export async function compressImageForUpload(
     } else {
       const reader = new FileReader();
       reader.onload = (e) => {
-        img.src = e.target?.result as string;
+        img.src = (e.target?.result as string) || '';
+      };
+      reader.onerror = () => {
+        resolve('');
       };
       reader.readAsDataURL(fileOrBase64);
     }
@@ -92,6 +121,24 @@ export async function uploadImageToStorage(
 
   if (typeof fileOrBase64 !== 'string') {
     filename = `${Date.now()}_${fileOrBase64.name.replace(/[^a-zA-Z0-9._-]/g, '')}`;
+  }
+
+  // If the file is already a remote URL (e.g. Unsplash or Cloud Storage), preserve it without re-uploading
+  if (
+    typeof fileOrBase64 === 'string' &&
+    (fileOrBase64.startsWith('http://') || fileOrBase64.startsWith('https://'))
+  ) {
+    return {
+      url: fileOrBase64,
+      storageObject: fileOrBase64,
+      bucket: bucketName,
+      cloudUrl: fileOrBase64,
+      uploadedAt: new Date().toISOString(),
+      mimeType: 'image/jpeg',
+      isCloudStorage:
+        fileOrBase64.includes('storage.googleapis.com') ||
+        fileOrBase64.includes('firebasestorage.app'),
+    };
   }
 
   // Fast client-side canvas compression
